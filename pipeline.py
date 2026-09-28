@@ -3,293 +3,264 @@ import numpy as np
 from ultralytics import YOLO
 import mss
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from models import CardOrientationClassifier
 from torchvision import transforms
 from PIL import Image
 import time
-import random
+from utils import generate_random_colors
 
-# =====================================================
-# === CONFIGURAÇÕES GERAIS ============================
-# =====================================================
-model_path_yolo = r"weights/yolo11seg_best.pt"
-model_path_orientation = r"weights/orientationnet_best.pth"
-model_path_digits = r"weights/yolo11det_best.pt"
-
-source = 0
-conf_thr_seg = 0.5
-conf_thr_digits = 0.5
-imgsz_seg = 448
-imgsz_digits = 640
-show_size = (840, 560)
-
-# arquivo de log (id,codigo)
-LOG_PATH = "card_codes_log.csv"
+from config import (
+    CARD_SEGMENTER_WEIGHTS_PATH,
+    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+    DIGIT_DETECTOR_WEIGHTS_PATH,
+    CAPTURE_SOURCE,
+    CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
+    DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
+    CARD_SEGMENTER_IMAGE_SIZE,
+    DIGIT_DETECTOR_IMAGE_SIZE,
+    FRAME_DISPLAY_SIZE,
+    DIGIT_DETECTOR_CLASS_COUNT,
+    CARD_CODES_LOG_PATH,
+)
 
 # =====================================================
 # === CORES ALEATÓRIAS PARA 24 CLASSES ===============
 # =====================================================
-NUM_CLASSES = 24
-colors = [
-    (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    for _ in range(NUM_CLASSES)
-]
-
-# =====================================================
-# === ORIENTATIONNET ==================================
-# =====================================================
-class OrientationNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 16, 3, 1, 1)
-        self.conv2 = nn.Conv2d(16, 32, 3, 1, 1)
-        self.conv3 = nn.Conv2d(32, 64, 3, 1, 1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(64 * 8 * 8, 128)
-        self.fc2 = nn.Linear(128, 4)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
+digit_class_colors = generate_random_colors(DIGIT_DETECTOR_CLASS_COUNT)
 
 # =====================================================
 # === CARREGAR MODELOS ================================
 # =====================================================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("🧠 Dispositivo ativo:", device)
+inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("🧠 Dispositivo ativo:", inference_device)
 
-orientation_model = OrientationNet().to(device)
-orientation_model.load_state_dict(torch.load(model_path_orientation, map_location=device))
-orientation_model.eval()
+card_orientation_classifier = CardOrientationClassifier().to(inference_device)
+card_orientation_classifier.load_state_dict(torch.load(CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH, map_location=inference_device))
+card_orientation_classifier.eval()
 
-transform = transforms.Compose([
+orientation_preprocessing = transforms.Compose([
     transforms.Resize((64, 64)),
     transforms.ToTensor()
 ])
 
-angle_map = {0: 0, 2: 90, 1: 180, 3: 270}
+orientation_class_to_angle = {0: 0, 2: 90, 1: 180, 3: 270}
 
-yolo_seg = YOLO(model_path_yolo)
-yolo_digits = YOLO(model_path_digits)
+card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
+digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
 
 # =====================================================
 # === CAPTURA =========================================
 # =====================================================
-if source == "screen":
-    sct = mss.mss()
-    monitor = sct.monitors[1]
+if CAPTURE_SOURCE == "screen":
+    screen_capture = mss.mss()
+    capture_monitor = screen_capture.monitors[1]
 else:
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
+    video_capture = cv2.VideoCapture(CAPTURE_SOURCE)
+    if not video_capture.isOpened():
         raise RuntimeError("❌ Erro ao iniciar webcam.")
 
 # =====================================================
 # === TRACKING SIMPLES POR CENTROIDE (COM TTL) =======
 # =====================================================
-def get_or_assign_card_id(cx, cy, tracks, frame_idx, next_id,
-                          max_dist=100, max_age=15):
+def get_or_assign_card_id(card_center_x, card_center_y, card_tracks, frame_index, next_card_id,
+                          max_tracking_distance=100, max_missing_frames=15):
     # Remover tracks muito antigos
-    dead_ids = []
-    for cid, info in tracks.items():
-        if frame_idx - info["last_seen"] > max_age:
-            dead_ids.append(cid)
-    for cid in dead_ids:
-        del tracks[cid]
+    expired_card_ids = []
+    for tracked_card_id, card_track in card_tracks.items():
+        if frame_index - card_track["last_seen"] > max_missing_frames:
+            expired_card_ids.append(tracked_card_id)
+    for tracked_card_id in expired_card_ids:
+        del card_tracks[tracked_card_id]
 
-    best_id = None
-    best_dist2 = max_dist * max_dist
+    closest_card_id = None
+    closest_distance_squared = max_tracking_distance * max_tracking_distance
 
-    for cid, info in tracks.items():
-        dx = cx - info["cx"]
-        dy = cy - info["cy"]
-        d2 = dx * dx + dy * dy
-        if d2 < best_dist2:
-            best_dist2 = d2
-            best_id = cid
+    for tracked_card_id, card_track in card_tracks.items():
+        center_offset_x = card_center_x - card_track["cx"]
+        center_offset_y = card_center_y - card_track["cy"]
+        distance_squared = center_offset_x * center_offset_x + center_offset_y * center_offset_y
+        if distance_squared < closest_distance_squared:
+            closest_distance_squared = distance_squared
+            closest_card_id = tracked_card_id
 
-    if best_id is not None:
-        tracks[best_id]["cx"] = cx
-        tracks[best_id]["cy"] = cy
-        tracks[best_id]["last_seen"] = frame_idx
-        return best_id, next_id
+    if closest_card_id is not None:
+        card_tracks[closest_card_id]["cx"] = card_center_x
+        card_tracks[closest_card_id]["cy"] = card_center_y
+        card_tracks[closest_card_id]["last_seen"] = frame_index
+        return closest_card_id, next_card_id
 
     # Cria novo ID
-    cid = next_id
-    tracks[cid] = {
-        "cx": cx,
-        "cy": cy,
+    tracked_card_id = next_card_id
+    card_tracks[tracked_card_id] = {
+        "cx": card_center_x,
+        "cy": card_center_y,
         "best_code": None,
         "best_prob": 0.0,
-        "last_seen": frame_idx,
+        "last_seen": frame_index,
     }
-    return cid, next_id + 1
+    return tracked_card_id, next_card_id + 1
 
 # =====================================================
 # === LOOP PRINCIPAL ==================================
 # =====================================================
 
-tracks = {}         # ID -> {cx, cy, best_code, best_prob, last_seen}
+card_tracks = {}         # ID -> {cx, cy, best_code, best_prob, last_seen}
 next_card_id = 0    # próximo ID disponível
-frame_idx = 0       # contador de frames
+frame_index = 0       # contador de frames
 
 # guarda códigos já registrados por ID -> set(códigos)
-seen_codes = {}
+logged_codes_by_card_id = {}
 
 # abre CSV em append; sem cabeçalho, só "id,codigo"
-log_file = open(LOG_PATH, "a", buffering=1, encoding="utf-8")
+card_codes_log_file = open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8")
 
 while True:
-    frame_start = time.time()
-    frame_idx += 1
+    frame_start_time = time.time()
+    frame_index += 1
 
-    if source == "screen":
-        frame = np.array(sct.grab(monitor))
+    if CAPTURE_SOURCE == "screen":
+        frame = np.array(screen_capture.grab(capture_monitor))
         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     else:
-        ret, frame = cap.read()
-        if not ret:
+        frame_read_success, frame = video_capture.read()
+        if not frame_read_success:
             break
 
-    display = frame.copy()
+    annotated_frame = frame.copy()
 
     # =================================================
     # YOLO SEGMENTAÇÃO
     # =================================================
-    results = yolo_seg(frame, conf=conf_thr_seg, imgsz=imgsz_seg, verbose=False)
-    r = results[0]
+    card_segmentation_results = card_segmenter(frame, conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD, imgsz=CARD_SEGMENTER_IMAGE_SIZE, verbose=False)
+    card_segmentation_result = card_segmentation_results[0]
 
-    if r.masks is not None:
-        masks_data = r.masks.data.cpu().numpy()   # [N, h, w]
-        polys = r.masks.xy                        # polígonos
-        boxes_xyxy = r.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
+    if card_segmentation_result.masks is not None:
+        card_mask_data = card_segmentation_result.masks.data.cpu().numpy()   # [N, h, w]
+        card_polygons = card_segmentation_result.masks.xy                        # polígonos
+        card_box_coordinates = card_segmentation_result.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
 
-        for i, pts in enumerate(polys):
-            pts = np.array(pts, dtype=np.float32)
+        for card_index, card_polygon_points in enumerate(card_polygons):
+            card_polygon_points = np.array(card_polygon_points, dtype=np.float32)
 
             # bounding box padrão YOLO (eixo alinhado)
-            x1, y1, x2, y2 = boxes_xyxy[i].astype(int)
+            card_left, card_top, card_right, card_bottom = card_box_coordinates[card_index].astype(int)
 
             # centro aproximado para tracking
-            cx_card = (x1 + x2) / 2
-            cy_card = (y1 + y2) / 2
+            card_center_x = (card_left + card_right) / 2
+            card_center_y = (card_top + card_bottom) / 2
 
             card_id, next_card_id = get_or_assign_card_id(
-                cx_card, cy_card, tracks, frame_idx, next_card_id
+                card_center_x, card_center_y, card_tracks, frame_index, next_card_id
             )
 
             # se ainda não temos set de códigos vistos para esse ID, cria
-            if card_id not in seen_codes:
-                seen_codes[card_id] = set()
+            if card_id not in logged_codes_by_card_id:
+                logged_codes_by_card_id[card_id] = set()
 
             # recorte da carta a partir da bounding box normal
-            crop = frame[y1:y2, x1:x2]
-            if crop.size == 0:
+            card_crop = frame[card_top:card_bottom, card_left:card_right]
+            if card_crop.size == 0:
                 continue
 
             # ORIENTATION NET
-            pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-            x = transform(pil).unsqueeze(0).to(device)
+            card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
+            orientation_input_tensor = orientation_preprocessing(card_crop_image).unsqueeze(0).to(inference_device)
 
             with torch.no_grad():
-                out = orientation_model(x)
-                pred = torch.argmax(out, dim=1).item()
-                angle = angle_map.get(pred, 0)
+                orientation_logits = card_orientation_classifier(orientation_input_tensor)
+                predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
+                orientation_angle_degrees = orientation_class_to_angle.get(predicted_orientation_class, 0)
 
-            if angle == 90:
-                corrected = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
-            elif angle == 180:
-                corrected = cv2.rotate(crop, cv2.ROTATE_180)
-            elif angle == 270:
-                corrected = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            if orientation_angle_degrees == 90:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_CLOCKWISE)
+            elif orientation_angle_degrees == 180:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_180)
+            elif orientation_angle_degrees == 270:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
             else:
-                corrected = crop
+                oriented_card_crop = card_crop
 
             # YOLO DIGITS
-            digit_results = yolo_digits(
-                corrected,
-                conf=conf_thr_digits,
-                imgsz=imgsz_digits,
+            digit_detection_results = digit_detector(
+                oriented_card_crop,
+                conf=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
+                imgsz=DIGIT_DETECTOR_IMAGE_SIZE,
                 iou=0.8,
                 verbose=False
             )
-            dr = digit_results[0]
+            digit_detection_result = digit_detection_results[0]
 
-            code_str = ""
-            prob_product = None
+            detected_code = ""
+            code_confidence_product = None
 
-            if dr.boxes is not None and len(dr.boxes) > 0:
-                boxes_d = dr.boxes
-                xyxy = boxes_d.xyxy.cpu().numpy().astype(int)
-                cls_ids = boxes_d.cls.cpu().numpy().astype(int)
-                confs = boxes_d.conf.cpu().numpy()
+            if digit_detection_result.boxes is not None and len(digit_detection_result.boxes) > 0:
+                digit_boxes = digit_detection_result.boxes
+                digit_box_coordinates = digit_boxes.xyxy.cpu().numpy().astype(int)
+                digit_class_ids = digit_boxes.cls.cpu().numpy().astype(int)
+                digit_confidences = digit_boxes.conf.cpu().numpy()
 
-                names = yolo_digits.names
-                digit_items = []
+                digit_class_names = digit_detector.names
+                detected_digits = []
 
-                for (dx1, dy1, dx2, dy2), cid, conf in zip(xyxy, cls_ids, confs):
-                    name = names[cid] if cid < len(names) else str(cid)
-                    cx_digit = (dx1 + dx2) / 2
-                    p_digit = float(conf)
-                    p_digit = max(1e-6, min(1.0, p_digit))
-                    digit_items.append((cx_digit, str(name), p_digit))
+                for (digit_left, digit_top, digit_right, digit_bottom), digit_class_id, digit_confidence in zip(digit_box_coordinates, digit_class_ids, digit_confidences):
+                    digit_label = digit_class_names[digit_class_id] if digit_class_id < len(digit_class_names) else str(digit_class_id)
+                    digit_center_x = (digit_left + digit_right) / 2
+                    clamped_digit_confidence = float(digit_confidence)
+                    clamped_digit_confidence = max(1e-6, min(1.0, clamped_digit_confidence))
+                    detected_digits.append((digit_center_x, str(digit_label), clamped_digit_confidence))
 
-                digit_items.sort(key=lambda t: t[0])
-                code_str = "".join(ch for _, ch, _ in digit_items)
+                detected_digits.sort(key=lambda digit_item: digit_item[0])
+                detected_code = "".join(digit_character for _, digit_character, _ in detected_digits)
 
-                prob_product = 1.0
-                for _, _, p in digit_items:
-                    prob_product *= p
+                code_confidence_product = 1.0
+                for _, _, digit_confidence_factor in detected_digits:
+                    code_confidence_product *= digit_confidence_factor
 
-                if len(code_str) == 13:
+                if len(detected_code) == 13:
                     # se for um novo melhor código E ainda não foi registrado, atualiza e loga
-                    if prob_product > tracks[card_id]["best_prob"]:
+                    if code_confidence_product > card_tracks[card_id]["best_prob"]:
                         # só registra se o código ainda não está no set daquele ID
-                        if code_str not in seen_codes[card_id]:
-                            seen_codes[card_id].add(code_str)
-                            log_file.write(f"{card_id},{code_str}\n")
+                        if detected_code not in logged_codes_by_card_id[card_id]:
+                            logged_codes_by_card_id[card_id].add(detected_code)
+                            card_codes_log_file.write(f"{card_id},{detected_code}\n")
 
-                        tracks[card_id]["best_code"] = code_str
-                        tracks[card_id]["best_prob"] = prob_product
+                        card_tracks[card_id]["best_code"] = detected_code
+                        card_tracks[card_id]["best_prob"] = code_confidence_product
 
             # DESENHAR MÁSCARA (AMARELA/VERDE)
-            best_code = tracks[card_id]["best_code"]
-            best_prob = tracks[card_id]["best_prob"]
+            best_card_code = card_tracks[card_id]["best_code"]
+            best_code_confidence = card_tracks[card_id]["best_prob"]
 
-            mask_color = (0,255,255) if best_code is None else (0,255,0)
-            pts_int = np.array(pts, dtype=np.int32)
+            mask_color = (0,255,255) if best_card_code is None else (0,255,0)
+            card_polygon_pixels = np.array(card_polygon_points, dtype=np.int32)
 
-            overlay = display.copy()
-            cv2.fillPoly(overlay, [pts_int], mask_color)
-            display = cv2.addWeighted(overlay, 0.25, display, 0.75, 0)
+            mask_overlay = annotated_frame.copy()
+            cv2.fillPoly(mask_overlay, [card_polygon_pixels], mask_color)
+            annotated_frame = cv2.addWeighted(mask_overlay, 0.25, annotated_frame, 0.75, 0)
 
             # BOUNDING BOX PADRÃO
             cv2.rectangle(
-                display,
-                (x1, y1),
-                (x2, y2),
-                (0,255,255) if best_code is None else (0,255,0),
+                annotated_frame,
+                (card_left, card_top),
+                (card_right, card_bottom),
+                (0,255,255) if best_card_code is None else (0,255,0),
                 1
             )
 
             # ID da carta
             cv2.putText(
-                display, f"ID {card_id}",
-                (x1, max(0, y1 - 10)),
+                annotated_frame, f"ID {card_id}",
+                (card_left, max(0, card_top - 10)),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (0, 255, 255), 2, cv2.LINE_AA
             )
 
             # Melhor código (se quiser manter na tela)
-            if best_code is not None:
-                prob_percent = best_prob * 100
+            if best_card_code is not None:
+                best_code_confidence_percent = best_code_confidence * 100
                 cv2.putText(
-                    display, f"{best_code} ({prob_percent:.1f}%)",
-                    (x1, max(0, y1 - 30)),
+                    annotated_frame, f"{best_card_code} ({best_code_confidence_percent:.1f}%)",
+                    (card_left, max(0, card_top - 30)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (0, 255, 0), 2, cv2.LINE_AA
                 )
@@ -297,16 +268,16 @@ while True:
     # =================================================
     # TEMPO TOTAL DO FRAME (única info no console)
     # =================================================
-    frame_total_ms = (time.time() - frame_start) * 1000
-    print(f"FRAME TOTAL: {frame_total_ms:.2f} ms")
+    frame_processing_time_ms = (time.time() - frame_start_time) * 1000
+    print(f"FRAME TOTAL: {frame_processing_time_ms:.2f} ms")
 
-    cv2.imshow("YOLO11 SEG + OrientationNet", cv2.resize(display, show_size))
+    cv2.imshow("YOLO11 SEG + CardOrientationClassifier", cv2.resize(annotated_frame, FRAME_DISPLAY_SIZE))
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-if source != "screen":
-    cap.release()
+if CAPTURE_SOURCE != "screen":
+    video_capture.release()
 
-log_file.close()
+card_codes_log_file.close()
 cv2.destroyAllWindows()

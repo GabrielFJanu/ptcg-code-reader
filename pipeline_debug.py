@@ -3,160 +3,133 @@ import numpy as np
 from ultralytics import YOLO
 import mss
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from models import CardOrientationClassifier
 from torchvision import transforms
 from PIL import Image
 import time
-import random
+from utils import generate_random_colors
 
-# =====================================================
-# === CONFIGURAÇÕES GERAIS ============================
-# =====================================================
-model_path_yolo = r"weights/yolo11seg_best.pt"
-model_path_orientation = r"weights/orientationnet_best.pth"
-model_path_digits = r"weights/yolo11det_best.pt"
-
-source = 0
-conf_thr_seg = 0.5
-conf_thr_digits = 0.5
-imgsz_seg = 448
-imgsz_digits = 640
-show_size = (840, 560)
-crop_size = (400, 250)  # (largura, altura) do CROP INDIVIDUAL (antes/depois)
+from config import (
+    CARD_SEGMENTER_WEIGHTS_PATH,
+    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+    DIGIT_DETECTOR_WEIGHTS_PATH,
+    CAPTURE_SOURCE,
+    CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
+    DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
+    CARD_SEGMENTER_IMAGE_SIZE,
+    DIGIT_DETECTOR_IMAGE_SIZE,
+    FRAME_DISPLAY_SIZE,
+    DEBUG_DIGIT_DETECTOR_CLASS_COUNT,
+    CARD_CROP_DISPLAY_SIZE,
+)
 
 # =====================================================
 # === CORES ALEATÓRIAS PARA 25 CLASSES ===============
 # =====================================================
-NUM_CLASSES = 25
-colors = [
-    (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    for _ in range(NUM_CLASSES)
-]
-
-# =====================================================
-# === ORIENTATIONNET ==================================
-# =====================================================
-class OrientationNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.conv1 = nn.Conv2d(3, 16, 3, 1, 1)
-        self.conv2 = nn.Conv2d(16, 32, 3, 1, 1)
-        self.conv3 = nn.Conv2d(32, 64, 3, 1, 1)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(64 * 8 * 8, 128)
-        self.fc2 = nn.Linear(128, 4)
-
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
+digit_class_colors = generate_random_colors(DEBUG_DIGIT_DETECTOR_CLASS_COUNT)
 
 # =====================================================
 # === CARREGAR MODELOS ================================
 # =====================================================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("🧠 Dispositivo ativo:", device)
+inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("🧠 Dispositivo ativo:", inference_device)
 
-orientation_model = OrientationNet().to(device)
-orientation_model.load_state_dict(torch.load(model_path_orientation, map_location=device))
-orientation_model.eval()
+card_orientation_classifier = CardOrientationClassifier().to(inference_device)
+card_orientation_classifier.load_state_dict(torch.load(CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH, map_location=inference_device))
+card_orientation_classifier.eval()
 
-transform = transforms.Compose([
+orientation_preprocessing = transforms.Compose([
     transforms.Resize((64, 64)),
     transforms.ToTensor()
 ])
 
-angle_map = {0: 0, 2: 90, 1: 180, 3: 270}
+orientation_class_to_angle = {0: 0, 2: 90, 1: 180, 3: 270}
 
-yolo_seg = YOLO(model_path_yolo)
-yolo_digits = YOLO(model_path_digits)
+card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
+digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
 
 # =====================================================
 # === CAPTURA =========================================
 # =====================================================
-if source == "screen":
-    sct = mss.mss()
-    monitor = sct.monitors[1]
+if CAPTURE_SOURCE == "screen":
+    screen_capture = mss.mss()
+    capture_monitor = screen_capture.monitors[1]
 else:
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
+    video_capture = cv2.VideoCapture(CAPTURE_SOURCE)
+    if not video_capture.isOpened():
         raise RuntimeError("❌ Erro ao iniciar webcam.")
 
 # =====================================================
 # === FUNÇÃO DE CROP ROTACIONADO ======================
 # =====================================================
-def crop_min_area_rect(image, rect):
-    (cx, cy), (w, h), angle = rect
-    M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
-    rotated = cv2.warpAffine(image, M, (image.shape[1], image.shape[0]), flags=cv2.INTER_LINEAR)
-    x1 = max(0, int(cx - w / 2))
-    y1 = max(0, int(cy - h / 2))
-    x2 = min(image.shape[1], int(cx + w / 2))
-    y2 = min(image.shape[0], int(cy + h / 2))
-    return rotated[y1:y2, x1:x2]
+def crop_min_area_rect(source_image, rotated_rectangle):
+    (rectangle_center_x, rectangle_center_y), (rectangle_width, rectangle_height), rectangle_angle_degrees = rotated_rectangle
+    rotation_matrix = cv2.getRotationMatrix2D((rectangle_center_x, rectangle_center_y), rectangle_angle_degrees, 1.0)
+    rotated_image = cv2.warpAffine(source_image, rotation_matrix, (source_image.shape[1], source_image.shape[0]), flags=cv2.INTER_LINEAR)
+    crop_left = max(0, int(rectangle_center_x - rectangle_width / 2))
+    crop_top = max(0, int(rectangle_center_y - rectangle_height / 2))
+    crop_right = min(source_image.shape[1], int(rectangle_center_x + rectangle_width / 2))
+    crop_bottom = min(source_image.shape[0], int(rectangle_center_y + rectangle_height / 2))
+    return rotated_image[crop_top:crop_bottom, crop_left:crop_right]
 
 # =====================================================
 # === LOOP PRINCIPAL ==================================
 # =====================================================
 while True:
-    frame_start = time.time()
+    frame_start_time = time.time()
 
-    if source == "screen":
-        frame = np.array(sct.grab(monitor))
+    if CAPTURE_SOURCE == "screen":
+        frame = np.array(screen_capture.grab(capture_monitor))
         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     else:
-        ret, frame = cap.read()
-        if not ret:
+        frame_read_success, frame = video_capture.read()
+        if not frame_read_success:
             break
 
-    display = frame.copy()
-    crops = []
+    annotated_frame = frame.copy()
+    card_comparison_panels = []
 
     # =================================================
     # YOLO SEGMENTAÇÃO
     # =================================================
-    t0 = time.time()
-    results = yolo_seg(frame, conf=conf_thr_seg, imgsz=imgsz_seg, verbose=False)
-    seg_ms = (time.time() - t0) * 1000
+    segmentation_start_time = time.time()
+    card_segmentation_results = card_segmenter(frame, conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD, imgsz=CARD_SEGMENTER_IMAGE_SIZE, verbose=False)
+    segmentation_time_ms = (time.time() - segmentation_start_time) * 1000
 
-    r = results[0]
-    if r.masks is not None:
-        for poly in r.masks.xy:
+    card_segmentation_result = card_segmentation_results[0]
+    if card_segmentation_result.masks is not None:
+        for card_polygon in card_segmentation_result.masks.xy:
 
-            pts = np.array(poly, dtype=np.float32)
-            rect = cv2.minAreaRect(pts)
-            box = cv2.boxPoints(rect).astype(int)
+            card_polygon_points = np.array(card_polygon, dtype=np.float32)
+            card_rotated_rectangle = cv2.minAreaRect(card_polygon_points)
+            card_rectangle_corners = cv2.boxPoints(card_rotated_rectangle).astype(int)
 
             # ================== MÁSCARA DA CARTA NO FRAME ==================
             # converte pontos do polígono para int
-            pts_int = pts.astype(np.int32)
+            card_polygon_pixels = card_polygon_points.astype(np.int32)
 
             # cria overlay para desenhar a máscara semi-transparente
-            overlay = display.copy()
+            mask_overlay = annotated_frame.copy()
             mask_color = (255, 200, 30)  # verde, pode trocar se quiser
-            cv2.fillPoly(overlay, [pts_int], mask_color)
+            cv2.fillPoly(mask_overlay, [card_polygon_pixels], mask_color)
 
-            alpha = 0.35  # transparência da máscara
-            display = cv2.addWeighted(overlay, alpha, display, 1 - alpha, 0)
+            mask_opacity = 0.35  # transparência da máscara
+            annotated_frame = cv2.addWeighted(mask_overlay, mask_opacity, annotated_frame, 1 - mask_opacity, 0)
 
             # borda da carta (retângulo mínimo) por cima da máscara
-            cv2.polylines(display, [box], True, (255, 0, 0), 2)
+            cv2.polylines(annotated_frame, [card_rectangle_corners], True, (255, 0, 0), 2)
 
             # ================== CROP DA CARTA ==================
-            crop = crop_min_area_rect(frame, rect)
-            if crop.size == 0:
+            card_crop = crop_min_area_rect(frame, card_rotated_rectangle)
+            if card_crop.size == 0:
                 continue
 
             # =================================================
             # CROP ANTES (SEM PROCESSAMENTO)
             # =================================================
-            crop_before = cv2.resize(crop, crop_size)
+            original_crop_display = cv2.resize(card_crop, CARD_CROP_DISPLAY_SIZE)
             cv2.putText(
-                crop_before, "Antes",
+                original_crop_display, "Antes",
                 (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (255, 255, 255), 2, cv2.LINE_AA
@@ -165,119 +138,119 @@ while True:
             # =================================================
             # ORIENTATION NET
             # =================================================
-            pil = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-            x = transform(pil).unsqueeze(0).to(device)
+            card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
+            orientation_input_tensor = orientation_preprocessing(card_crop_image).unsqueeze(0).to(inference_device)
 
-            t1 = time.time()
+            orientation_start_time = time.time()
             with torch.no_grad():
-                out = orientation_model(x)
-                pred = torch.argmax(out, dim=1).item()
-                angle = angle_map.get(pred, 0)
-            cls_ms = (time.time() - t1) * 1000
+                orientation_logits = card_orientation_classifier(orientation_input_tensor)
+                predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
+                orientation_angle_degrees = orientation_class_to_angle.get(predicted_orientation_class, 0)
+            orientation_time_ms = (time.time() - orientation_start_time) * 1000
 
-            if angle == 90:
-                corrected = cv2.rotate(crop, cv2.ROTATE_90_CLOCKWISE)
-            elif angle == 180:
-                corrected = cv2.rotate(crop, cv2.ROTATE_180)
-            elif angle == 270:
-                corrected = cv2.rotate(crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            if orientation_angle_degrees == 90:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_CLOCKWISE)
+            elif orientation_angle_degrees == 180:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_180)
+            elif orientation_angle_degrees == 270:
+                oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_COUNTERCLOCKWISE)
             else:
-                corrected = crop
+                oriented_card_crop = card_crop
 
             # =================================================
             # YOLO DÍGITOS NO CROP CORRIGIDO (APENAS AQUI)
             # =================================================
-            digit_results = yolo_digits(
-                corrected, conf=conf_thr_digits, imgsz=imgsz_digits, iou=0.7, verbose=False
+            digit_detection_results = digit_detector(
+                oriented_card_crop, conf=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD, imgsz=DIGIT_DETECTOR_IMAGE_SIZE, iou=0.7, verbose=False
             )
-            dr = digit_results[0]
+            digit_detection_result = digit_detection_results[0]
 
-            code_str = ""  # string final do código lido
+            detected_code = ""  # string final do código lido
 
-            if dr.boxes is not None and len(dr.boxes) > 0:
-                boxes = dr.boxes
-                xyxy = boxes.xyxy.cpu().numpy().astype(int)
-                cls_ids = boxes.cls.cpu().numpy().astype(int)
+            if digit_detection_result.boxes is not None and len(digit_detection_result.boxes) > 0:
+                digit_boxes = digit_detection_result.boxes
+                digit_box_coordinates = digit_boxes.xyxy.cpu().numpy().astype(int)
+                digit_class_ids = digit_boxes.cls.cpu().numpy().astype(int)
 
-                names = yolo_digits.names
+                digit_class_names = digit_detector.names
 
                 # lista para ordenar os dígitos pelo eixo x (esquerda -> direita)
-                digit_items = []
+                detected_digits = []
 
-                for (x1, y1, x2, y2), cid in zip(xyxy, cls_ids):
-                    color = colors[cid % NUM_CLASSES]
+                for (digit_left, digit_top, digit_right, digit_bottom), digit_class_id in zip(digit_box_coordinates, digit_class_ids):
+                    digit_color = digit_class_colors[digit_class_id % DEBUG_DIGIT_DETECTOR_CLASS_COUNT]
 
                     # desenha bbox no CROP CORRIGIDO (NÃO NO DE CIMA)
-                    cv2.rectangle(corrected, (x1, y1), (x2, y2), color, 2)
+                    cv2.rectangle(oriented_card_crop, (digit_left, digit_top), (digit_right, digit_bottom), digit_color, 2)
 
-                    if isinstance(names, dict):
-                        name = names.get(cid, str(cid))
+                    if isinstance(digit_class_names, dict):
+                        digit_label = digit_class_names.get(digit_class_id, str(digit_class_id))
                     else:
-                        name = names[cid] if cid < len(names) else str(cid)
+                        digit_label = digit_class_names[digit_class_id] if digit_class_id < len(digit_class_names) else str(digit_class_id)
 
-                    name = str(name)
+                    digit_label = str(digit_label)
 
                     cv2.putText(
-                        corrected, name,
-                        (x1, max(0, y1 - 5)),
+                        oriented_card_crop, digit_label,
+                        (digit_left, max(0, digit_top - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.5, color, 1, cv2.LINE_AA
+                        0.5, digit_color, 1, cv2.LINE_AA
                     )
 
                     # centro em x pra ordenar, mais o caractere
-                    cx = (x1 + x2) / 2.0
-                    digit_items.append((cx, name))
+                    digit_center_x = (digit_left + digit_right) / 2.0
+                    detected_digits.append((digit_center_x, digit_label))
 
                 # ordenar da esquerda para a direita e montar string
-                digit_items.sort(key=lambda t: t[0])
-                code_str = "".join(ch for _, ch in digit_items)
+                detected_digits.sort(key=lambda digit_item: digit_item[0])
+                detected_code = "".join(digit_character for _, digit_character in detected_digits)
 
                 # escreve o código no crop corrigido (embaixo)
-                if code_str:
+                if detected_code:
                     cv2.putText(
-                        corrected, code_str,
-                        (10, corrected.shape[0] - 10),
+                        oriented_card_crop, detected_code,
+                        (10, oriented_card_crop.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.8, (0, 255, 0), 2, cv2.LINE_AA
                     )
 
-            print(f"SEG: {seg_ms:.2f} ms | CLS: {cls_ms:.2f} ms")
+            print(f"SEG: {segmentation_time_ms:.2f} ms | CLS: {orientation_time_ms:.2f} ms")
 
             # =================================================
             # MONTAR PAINEL: CIMA = ANTES | BAIXO = DEPOIS
             # =================================================
-            crop_after = cv2.resize(corrected, crop_size)
+            oriented_crop_display = cv2.resize(oriented_card_crop, CARD_CROP_DISPLAY_SIZE)
             cv2.putText(
-                crop_after, "Depois",
+                oriented_crop_display, "Depois",
                 (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (255, 255, 255), 2, cv2.LINE_AA
             )
 
-            panel = np.vstack([crop_before, crop_after])
-            crops.append(panel)
+            card_comparison_panel = np.vstack([original_crop_display, oriented_crop_display])
+            card_comparison_panels.append(card_comparison_panel)
 
-    frame_total_ms = (time.time() - frame_start) * 1000
-    print(f"FRAME TOTAL: {frame_total_ms:.2f} ms")
+    frame_processing_time_ms = (time.time() - frame_start_time) * 1000
+    print(f"FRAME TOTAL: {frame_processing_time_ms:.2f} ms")
 
-    cv2.imshow("YOLO11 SEG + OrientationNet", cv2.resize(display, show_size))
+    cv2.imshow("YOLO11 SEG + CardOrientationClassifier", cv2.resize(annotated_frame, FRAME_DISPLAY_SIZE))
 
     # =================================================
     # JANELA DOS CROPS (ANTES / DEPOIS)
     # =================================================
-    if crops:
+    if card_comparison_panels:
         # cada item de crops já é painel 2x mais alto; empilha lado a lado
-        crop_panel = np.hstack(crops)
-        cv2.imshow("Crops Corrigidos", crop_panel)
+        combined_crop_panel = np.hstack(card_comparison_panels)
+        cv2.imshow("Crops Corrigidos", combined_crop_panel)
     else:
-        # janela vazia: altura = 2 * crop_size[1] (duas linhas)
-        empty = np.zeros((2 * crop_size[1], crop_size[0], 3), dtype=np.uint8)
-        cv2.imshow("Crops Corrigidos", empty)
+        # janela vazia: altura = 2 * CARD_CROP_DISPLAY_SIZE[1] (duas linhas)
+        empty_crop_panel = np.zeros((2 * CARD_CROP_DISPLAY_SIZE[1], CARD_CROP_DISPLAY_SIZE[0], 3), dtype=np.uint8)
+        cv2.imshow("Crops Corrigidos", empty_crop_panel)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-if source != "screen":
-    cap.release()
+if CAPTURE_SOURCE != "screen":
+    video_capture.release()
 
 cv2.destroyAllWindows()
