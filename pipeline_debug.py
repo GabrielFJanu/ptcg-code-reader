@@ -2,7 +2,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import torch
-from models import CardOrientationClassifier
+from models.CardOrientationClassifier import CardOrientationClassifier
+from models.CardSegmenter import CardSegmenter
 from PIL import Image
 import time
 from utils import generate_random_colors
@@ -40,7 +41,11 @@ card_orientation_classifier = CardOrientationClassifier.from_weights(
     device=inference_device,
 )
 
-card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
+card_segmenter = CardSegmenter(
+    weights_path=CARD_SEGMENTER_WEIGHTS_PATH,
+    confidence_threshold=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
+    image_size=CARD_SEGMENTER_IMAGE_SIZE,
+)
 digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
 
 # =====================================================
@@ -77,10 +82,9 @@ try:
             # YOLO SEGMENTAÇÃO
             # =================================================
             segmentation_start_time = time.time()
-            card_segmentation_results = card_segmenter(frame, conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD, imgsz=CARD_SEGMENTER_IMAGE_SIZE, verbose=False)
+            card_segmentation_result = card_segmenter.predict(frame)
             segmentation_time_ms = (time.time() - segmentation_start_time) * 1000
 
-            card_segmentation_result = card_segmentation_results[0]
             if card_segmentation_result.masks is not None:
                 for card_polygon in card_segmentation_result.masks.xy:
 

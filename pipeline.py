@@ -3,7 +3,8 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import torch
-from models import CardOrientationClassifier
+from models.CardOrientationClassifier import CardOrientationClassifier
+from models.CardSegmenter import CardSegmenter
 from PIL import Image
 from utils import generate_random_colors
 from capture import CaptureDevice
@@ -37,7 +38,12 @@ card_orientation_classifier = CardOrientationClassifier.from_weights(
     CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
     device=inference_device,
 )
-card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
+card_segmenter = CardSegmenter(
+    weights_path=CARD_SEGMENTER_WEIGHTS_PATH,
+    confidence_threshold=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
+    image_size=CARD_SEGMENTER_IMAGE_SIZE,
+    tracker_config=CARD_TRACKER_CONFIG,
+)
 digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
 
 # =====================================================
@@ -62,24 +68,9 @@ try:
             annotated_frame = frame.copy()
 
             # CARD SEGMENTATION
-            card_segmentation_results = card_segmenter.track(
-                frame,
-                persist=True,
-                tracker=CARD_TRACKER_CONFIG,
-                conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
-                imgsz=CARD_SEGMENTER_IMAGE_SIZE,
-                verbose=False,
-            )
-            card_segmentation_result = card_segmentation_results[0]
+            card_segmentation_result = card_segmenter.track(frame)
 
-            # Alguns frames podem ter detecções ainda sem IDs confirmados pelo tracker.
-            has_tracked_card_masks = (
-                card_segmentation_result.masks is not None
-                and card_segmentation_result.boxes is not None
-                and card_segmentation_result.boxes.id is not None
-            )
-
-            if has_tracked_card_masks:
+            if card_segmentation_result.has_tracked_cards:
                 card_track_ids = card_segmentation_result.boxes.id.int().cpu().tolist()
                 card_polygons = card_segmentation_result.masks.xy                        # polígonos
                 card_box_coordinates = card_segmentation_result.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
