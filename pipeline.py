@@ -1,3 +1,8 @@
+import os
+
+# Não instalar dependências automaticamente ao inicializar o tracker.
+os.environ["YOLO_AUTOINSTALL"] = "false"
+
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -6,11 +11,11 @@ import torch
 from models import CardOrientationClassifier
 from torchvision import transforms
 from PIL import Image
-import time
 from utils import generate_random_colors
 
 from config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
+    CARD_TRACKER_CONFIG,
     CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
     DIGIT_DETECTOR_WEIGHTS_PATH,
     CAPTURE_SOURCE,
@@ -60,53 +65,10 @@ else:
         raise RuntimeError("❌ Erro ao iniciar webcam.")
 
 # =====================================================
-# === TRACKING SIMPLES POR CENTROIDE (COM TTL) =======
-# =====================================================
-def get_or_assign_card_id(card_center_x, card_center_y, card_tracks, frame_index, next_card_id,
-                          max_tracking_distance=100, max_missing_frames=15):
-    # Remover tracks muito antigos
-    expired_card_ids = []
-    for tracked_card_id, card_track in card_tracks.items():
-        if frame_index - card_track["last_seen"] > max_missing_frames:
-            expired_card_ids.append(tracked_card_id)
-    for tracked_card_id in expired_card_ids:
-        del card_tracks[tracked_card_id]
-
-    closest_card_id = None
-    closest_distance_squared = max_tracking_distance * max_tracking_distance
-
-    for tracked_card_id, card_track in card_tracks.items():
-        center_offset_x = card_center_x - card_track["cx"]
-        center_offset_y = card_center_y - card_track["cy"]
-        distance_squared = center_offset_x * center_offset_x + center_offset_y * center_offset_y
-        if distance_squared < closest_distance_squared:
-            closest_distance_squared = distance_squared
-            closest_card_id = tracked_card_id
-
-    if closest_card_id is not None:
-        card_tracks[closest_card_id]["cx"] = card_center_x
-        card_tracks[closest_card_id]["cy"] = card_center_y
-        card_tracks[closest_card_id]["last_seen"] = frame_index
-        return closest_card_id, next_card_id
-
-    # Cria novo ID
-    tracked_card_id = next_card_id
-    card_tracks[tracked_card_id] = {
-        "cx": card_center_x,
-        "cy": card_center_y,
-        "best_code": None,
-        "best_prob": 0.0,
-        "last_seen": frame_index,
-    }
-    return tracked_card_id, next_card_id + 1
-
-# =====================================================
 # === LOOP PRINCIPAL ==================================
 # =====================================================
 
-card_tracks = {}         # ID -> {cx, cy, best_code, best_prob, last_seen}
-next_card_id = 0    # próximo ID disponível
-frame_index = 0       # contador de frames
+card_readings_by_id = {}  # ID do ByteTrack -> melhor código e confiança
 
 # guarda códigos já registrados por ID -> set(códigos)
 logged_codes_by_card_id = {}
@@ -115,8 +77,6 @@ logged_codes_by_card_id = {}
 card_codes_log_file = open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8")
 
 while True:
-    frame_start_time = time.time()
-    frame_index += 1
 
     if CAPTURE_SOURCE == "screen":
         frame = np.array(screen_capture.grab(capture_monitor))
@@ -131,11 +91,23 @@ while True:
     # =================================================
     # YOLO SEGMENTAÇÃO
     # =================================================
-    card_segmentation_results = card_segmenter(frame, conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD, imgsz=CARD_SEGMENTER_IMAGE_SIZE, verbose=False)
+    card_segmentation_results = card_segmenter.track(
+        frame,
+        persist=True,
+        tracker=CARD_TRACKER_CONFIG,
+        conf=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
+        imgsz=CARD_SEGMENTER_IMAGE_SIZE,
+        verbose=False,
+    )
     card_segmentation_result = card_segmentation_results[0]
 
-    if card_segmentation_result.masks is not None:
-        card_mask_data = card_segmentation_result.masks.data.cpu().numpy()   # [N, h, w]
+    # Alguns frames podem ter detecções ainda sem IDs confirmados pelo tracker.
+    if (
+        card_segmentation_result.masks is not None
+        and card_segmentation_result.boxes is not None
+        and card_segmentation_result.boxes.id is not None
+    ):
+        card_track_ids = card_segmentation_result.boxes.id.int().cpu().tolist()
         card_polygons = card_segmentation_result.masks.xy                        # polígonos
         card_box_coordinates = card_segmentation_result.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
 
@@ -145,13 +117,12 @@ while True:
             # bounding box padrão YOLO (eixo alinhado)
             card_left, card_top, card_right, card_bottom = card_box_coordinates[card_index].astype(int)
 
-            # centro aproximado para tracking
-            card_center_x = (card_left + card_right) / 2
-            card_center_y = (card_top + card_bottom) / 2
-
-            card_id, next_card_id = get_or_assign_card_id(
-                card_center_x, card_center_y, card_tracks, frame_index, next_card_id
-            )
+            card_id = card_track_ids[card_index]
+            if card_id not in card_readings_by_id:
+                card_readings_by_id[card_id] = {
+                    "best_code": None,
+                    "best_prob": 0.0,
+                }
 
             # se ainda não temos set de códigos vistos para esse ID, cria
             if card_id not in logged_codes_by_card_id:
@@ -218,18 +189,18 @@ while True:
 
                 if len(detected_code) == 13:
                     # se for um novo melhor código E ainda não foi registrado, atualiza e loga
-                    if code_confidence_product > card_tracks[card_id]["best_prob"]:
+                    if code_confidence_product > card_readings_by_id[card_id]["best_prob"]:
                         # só registra se o código ainda não está no set daquele ID
                         if detected_code not in logged_codes_by_card_id[card_id]:
                             logged_codes_by_card_id[card_id].add(detected_code)
                             card_codes_log_file.write(f"{card_id},{detected_code}\n")
 
-                        card_tracks[card_id]["best_code"] = detected_code
-                        card_tracks[card_id]["best_prob"] = code_confidence_product
+                        card_readings_by_id[card_id]["best_code"] = detected_code
+                        card_readings_by_id[card_id]["best_prob"] = code_confidence_product
 
             # DESENHAR MÁSCARA (AMARELA/VERDE)
-            best_card_code = card_tracks[card_id]["best_code"]
-            best_code_confidence = card_tracks[card_id]["best_prob"]
+            best_card_code = card_readings_by_id[card_id]["best_code"]
+            best_code_confidence = card_readings_by_id[card_id]["best_prob"]
 
             mask_color = (0,255,255) if best_card_code is None else (0,255,0)
             card_polygon_pixels = np.array(card_polygon_points, dtype=np.int32)
@@ -264,12 +235,6 @@ while True:
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7, (0, 255, 0), 2, cv2.LINE_AA
                 )
-
-    # =================================================
-    # TEMPO TOTAL DO FRAME (única info no console)
-    # =================================================
-    frame_processing_time_ms = (time.time() - frame_start_time) * 1000
-    print(f"FRAME TOTAL: {frame_processing_time_ms:.2f} ms")
 
     cv2.imshow("YOLO11 SEG + CardOrientationClassifier", cv2.resize(annotated_frame, FRAME_DISPLAY_SIZE))
 

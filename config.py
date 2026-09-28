@@ -12,6 +12,9 @@ DIGIT_DETECTOR_CONFIDENCE_THRESHOLD = 0.5
 CARD_SEGMENTER_IMAGE_SIZE = 448
 DIGIT_DETECTOR_IMAGE_SIZE = 640
 
+# Tracker integrado ao Ultralytics (configuração incluída na biblioteca).
+CARD_TRACKER_CONFIG = "bytetrack.yaml"
+
 # Visualização (largura, altura).
 FRAME_DISPLAY_SIZE = (840, 560)
 CARD_CROP_DISPLAY_SIZE = (400, 250)
