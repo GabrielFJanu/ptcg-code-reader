@@ -3,7 +3,6 @@ import numpy as np
 from ultralytics import YOLO
 import torch
 from models import CardOrientationClassifier
-from torchvision import transforms
 from PIL import Image
 import time
 from utils import generate_random_colors
@@ -36,16 +35,10 @@ digit_class_colors = generate_random_colors(DEBUG_DIGIT_DETECTOR_CLASS_COUNT)
 inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("🧠 Dispositivo ativo:", inference_device)
 
-card_orientation_classifier = CardOrientationClassifier().to(inference_device)
-card_orientation_classifier.load_state_dict(torch.load(CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH, map_location=inference_device))
-card_orientation_classifier.eval()
-
-orientation_preprocessing = transforms.Compose([
-    transforms.Resize((64, 64)),
-    transforms.ToTensor()
-])
-
-orientation_class_to_angle = {0: 0, 2: 90, 1: 180, 3: 270}
+card_orientation_classifier = CardOrientationClassifier.from_weights(
+    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+    device=inference_device,
+)
 
 card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
 digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
@@ -130,13 +123,13 @@ try:
                     # ORIENTATION NET
                     # =================================================
                     card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
-                    orientation_input_tensor = orientation_preprocessing(card_crop_image).unsqueeze(0).to(inference_device)
+                    orientation_input_tensor = card_orientation_classifier.input_image_transform(card_crop_image).unsqueeze(0).to(inference_device)
 
                     orientation_start_time = time.time()
                     with torch.no_grad():
                         orientation_logits = card_orientation_classifier(orientation_input_tensor)
                         predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
-                        orientation_angle_degrees = orientation_class_to_angle.get(predicted_orientation_class, 0)
+                        orientation_angle_degrees = card_orientation_classifier.orientation_angle_by_class_id.get(predicted_orientation_class, 0)
                     orientation_time_ms = (time.time() - orientation_start_time) * 1000
 
                     if orientation_angle_degrees == 90:

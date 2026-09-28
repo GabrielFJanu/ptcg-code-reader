@@ -4,7 +4,6 @@ import numpy as np
 from ultralytics import YOLO
 import torch
 from models import CardOrientationClassifier
-from torchvision import transforms
 from PIL import Image
 from utils import generate_random_colors
 from capture import CaptureDevice
@@ -29,22 +28,15 @@ from config import (
 # CORES ALEATÓRIAS PARA CADA DIGITO
 digit_class_colors = generate_random_colors(DIGIT_DETECTOR_CLASS_COUNT)
 
+# DISPOSITIVO DE INFÊRENCIA
+inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Dispositivo de inferência:", inference_device)
 
 # CARREGAR MODELOS
-inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("🧠 Dispositivo ativo:", inference_device)
-
-card_orientation_classifier = CardOrientationClassifier().to(inference_device)
-card_orientation_classifier.load_state_dict(torch.load(CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH, map_location=inference_device))
-card_orientation_classifier.eval()
-
-orientation_preprocessing = transforms.Compose([
-    transforms.Resize((64, 64)),
-    transforms.ToTensor()
-])
-
-orientation_class_to_angle = {0: 0, 2: 90, 1: 180, 3: 270}
-
+card_orientation_classifier = CardOrientationClassifier.from_weights(
+    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+    device=inference_device,
+)
 card_segmenter = YOLO(CARD_SEGMENTER_WEIGHTS_PATH)
 digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
 
@@ -69,9 +61,7 @@ try:
 
             annotated_frame = frame.copy()
 
-            # =================================================
-            # YOLO SEGMENTAÇÃO
-            # =================================================
+            # CARD SEGMENTATION
             card_segmentation_results = card_segmenter.track(
                 frame,
                 persist=True,
@@ -83,11 +73,13 @@ try:
             card_segmentation_result = card_segmentation_results[0]
 
             # Alguns frames podem ter detecções ainda sem IDs confirmados pelo tracker.
-            if (
+            has_tracked_card_masks = (
                 card_segmentation_result.masks is not None
                 and card_segmentation_result.boxes is not None
                 and card_segmentation_result.boxes.id is not None
-            ):
+            )
+
+            if has_tracked_card_masks:
                 card_track_ids = card_segmentation_result.boxes.id.int().cpu().tolist()
                 card_polygons = card_segmentation_result.masks.xy                        # polígonos
                 card_box_coordinates = card_segmentation_result.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
@@ -116,12 +108,12 @@ try:
 
                     # ORIENTATION NET
                     card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
-                    orientation_input_tensor = orientation_preprocessing(card_crop_image).unsqueeze(0).to(inference_device)
+                    orientation_input_tensor = card_orientation_classifier.input_image_transform(card_crop_image).unsqueeze(0).to(inference_device)
 
                     with torch.no_grad():
                         orientation_logits = card_orientation_classifier(orientation_input_tensor)
                         predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
-                        orientation_angle_degrees = orientation_class_to_angle.get(predicted_orientation_class, 0)
+                        orientation_angle_degrees = card_orientation_classifier.orientation_angle_by_class_id.get(predicted_orientation_class, 0)
 
                     if orientation_angle_degrees == 90:
                         oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_CLOCKWISE)
