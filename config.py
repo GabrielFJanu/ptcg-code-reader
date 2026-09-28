@@ -6,7 +6,9 @@ CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH = "weights/card_orientation_classifier.
 DIGIT_DETECTOR_WEIGHTS_PATH = "weights/digit_detector.pt"
 
 # Captura e inferência compartilhadas.
-CAPTURE_SOURCE = 0  # Índice da webcam ou "screen".
+CAPTURE_SOURCE = "webcam"  # "webcam" ou "screen".
+WEBCAM_INDEX = 0  # Índice da câmera usada quando a fonte é "webcam".
+MONITOR_INDEX = 1  # 1 = primeiro monitor; 0 = área de todos os monitores.
 CARD_SEGMENTER_CONFIDENCE_THRESHOLD = 0.5
 DIGIT_DETECTOR_CONFIDENCE_THRESHOLD = 0.5
 CARD_SEGMENTER_IMAGE_SIZE = 448
