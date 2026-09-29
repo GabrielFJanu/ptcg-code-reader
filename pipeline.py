@@ -1,11 +1,10 @@
 import os
 import cv2
 import numpy as np
-from ultralytics import YOLO
 import torch
 from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
-from PIL import Image
+from models.DigitDetector import DigitDetector
 from utils import generate_random_colors
 from capture import CaptureDevice
 
@@ -21,6 +20,7 @@ from config import (
     DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
     CARD_SEGMENTER_IMAGE_SIZE,
     DIGIT_DETECTOR_IMAGE_SIZE,
+    DIGIT_DETECTOR_IOU_THRESHOLD,
     FRAME_DISPLAY_SIZE,
     DIGIT_DETECTOR_CLASS_COUNT,
     CARD_CODES_LOG_PATH,
@@ -34,8 +34,8 @@ inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Dispositivo de inferência:", inference_device)
 
 # CARREGAR MODELOS
-card_orientation_classifier = CardOrientationClassifier.from_weights(
-    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+card_orientation_classifier = CardOrientationClassifier(
+    weights_path=CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
     device=inference_device,
 )
 card_segmenter = CardSegmenter(
@@ -44,7 +44,12 @@ card_segmenter = CardSegmenter(
     image_size=CARD_SEGMENTER_IMAGE_SIZE,
     tracker_config=CARD_TRACKER_CONFIG,
 )
-digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
+digit_detector = DigitDetector(
+    weights_path=DIGIT_DETECTOR_WEIGHTS_PATH,
+    confidence_threshold=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
+    image_size=DIGIT_DETECTOR_IMAGE_SIZE,
+    iou_threshold=DIGIT_DETECTOR_IOU_THRESHOLD,
+)
 
 # =====================================================
 # === LOOP PRINCIPAL ==================================
@@ -68,9 +73,9 @@ try:
             annotated_frame = frame.copy()
 
             # CARD SEGMENTATION
-            card_segmentation_result = card_segmenter.track(frame)
+            has_tracked_cards, card_segmentation_result = card_segmenter.track(frame)
 
-            if card_segmentation_result.has_tracked_cards:
+            if has_tracked_cards:
                 card_track_ids = card_segmentation_result.boxes.id.int().cpu().tolist()
                 card_polygons = card_segmentation_result.masks.xy                        # polígonos
                 card_box_coordinates = card_segmentation_result.boxes.xyxy.cpu().numpy()   # bounding boxes padrão [N,4]
@@ -98,13 +103,7 @@ try:
                         continue
 
                     # ORIENTATION NET
-                    card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
-                    orientation_input_tensor = card_orientation_classifier.input_image_transform(card_crop_image).unsqueeze(0).to(inference_device)
-
-                    with torch.no_grad():
-                        orientation_logits = card_orientation_classifier(orientation_input_tensor)
-                        predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
-                        orientation_angle_degrees = card_orientation_classifier.orientation_angle_by_class_id.get(predicted_orientation_class, 0)
+                    orientation_angle_degrees = card_orientation_classifier.predict(card_crop)
 
                     if orientation_angle_degrees == 90:
                         oriented_card_crop = cv2.rotate(card_crop, cv2.ROTATE_90_CLOCKWISE)
@@ -116,29 +115,23 @@ try:
                         oriented_card_crop = card_crop
 
                     # YOLO DIGITS
-                    digit_detection_results = digit_detector(
-                        oriented_card_crop,
-                        conf=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
-                        imgsz=DIGIT_DETECTOR_IMAGE_SIZE,
-                        iou=0.8,
-                        verbose=False
+                    has_detected_digits, digit_detection_result = digit_detector.predict(
+                        oriented_card_crop
                     )
-                    digit_detection_result = digit_detection_results[0]
 
                     detected_code = ""
                     code_confidence_product = None
 
-                    if digit_detection_result.boxes is not None and len(digit_detection_result.boxes) > 0:
+                    if has_detected_digits:
                         digit_boxes = digit_detection_result.boxes
                         digit_box_coordinates = digit_boxes.xyxy.cpu().numpy().astype(int)
                         digit_class_ids = digit_boxes.cls.cpu().numpy().astype(int)
                         digit_confidences = digit_boxes.conf.cpu().numpy()
 
-                        digit_class_names = digit_detector.names
                         detected_digits = []
 
                         for (digit_left, digit_top, digit_right, digit_bottom), digit_class_id, digit_confidence in zip(digit_box_coordinates, digit_class_ids, digit_confidences):
-                            digit_label = digit_class_names[digit_class_id] if digit_class_id < len(digit_class_names) else str(digit_class_id)
+                            digit_label = digit_detector.get_class_label(digit_class_id)
                             digit_center_x = (digit_left + digit_right) / 2
                             clamped_digit_confidence = float(digit_confidence)
                             clamped_digit_confidence = max(1e-6, min(1.0, clamped_digit_confidence))

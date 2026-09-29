@@ -1,10 +1,16 @@
+"""Classificação da orientação de cartas."""
+
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 from torchvision import transforms
 
 
-class CardOrientationClassifier(nn.Module):
+class CardOrientationPyTorchModel(nn.Module):
+    """Rede neural PyTorch que classifica a orientação de uma carta."""
+
     def __init__(self):
         super().__init__()
         self.conv1 = nn.Conv2d(3, 16, 3, 1, 1)
@@ -14,26 +20,39 @@ class CardOrientationClassifier(nn.Module):
         self.fc1 = nn.Linear(64 * 8 * 8, 128)
         self.fc2 = nn.Linear(128, 4)
 
-        self.input_image_transform = transforms.Compose([
+    def forward(self, input_tensor):
+        features = self.pool(F.relu(self.conv1(input_tensor)))
+        features = self.pool(F.relu(self.conv2(features)))
+        features = self.pool(F.relu(self.conv3(features)))
+        features = features.view(features.size(0), -1)
+        features = F.relu(self.fc1(features))
+        return self.fc2(features)
+
+
+class CardOrientationClassifier:
+    """Carrega o modelo e encapsula a classificação da orientação de cartas."""
+
+    def __init__(self, weights_path, device):
+        self._device = device
+        self._input_transform = transforms.Compose([
             transforms.Resize((64, 64)),
             transforms.ToTensor(),
         ])
-        
-        self.orientation_angle_by_class_id = {0: 0, 2: 90, 1: 180, 3: 270}
+        self._angle_degrees_by_class_id = {0: 0, 2: 90, 1: 180, 3: 270}
 
-    @classmethod
-    def from_weights(cls, weights_path, device):
-        """Cria o classificador com pesos locais, pronto para inferência."""
-        classifier = cls().to(device)
+        self._model = CardOrientationPyTorchModel().to(device)
         model_state = torch.load(weights_path, map_location=device)
-        classifier.load_state_dict(model_state)
-        classifier.eval()
-        return classifier
+        self._model.load_state_dict(model_state)
+        self._model.eval()
 
-    def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = x.view(x.size(0), -1)
-        x = F.relu(self.fc1(x))
-        return self.fc2(x)
+    def predict(self, card_crop):
+        """Classifica um recorte BGR e retorna o ângulo previsto em graus."""
+        rgb_card_crop = cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB)
+        card_image = Image.fromarray(rgb_card_crop)
+        input_tensor = self._input_transform(card_image).unsqueeze(0).to(self._device)
+
+        with torch.no_grad():
+            logits = self._model(input_tensor)
+            predicted_class_id = torch.argmax(logits, dim=1).item()
+
+        return self._angle_degrees_by_class_id[predicted_class_id]

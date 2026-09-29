@@ -1,10 +1,9 @@
 import cv2
 import numpy as np
-from ultralytics import YOLO
 import torch
 from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
-from PIL import Image
+from models.DigitDetector import DigitDetector
 import time
 from utils import generate_random_colors
 from capture import CaptureDevice
@@ -20,6 +19,7 @@ from config import (
     DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
     CARD_SEGMENTER_IMAGE_SIZE,
     DIGIT_DETECTOR_IMAGE_SIZE,
+    DEBUG_DIGIT_DETECTOR_IOU_THRESHOLD,
     FRAME_DISPLAY_SIZE,
     DEBUG_DIGIT_DETECTOR_CLASS_COUNT,
     CARD_CROP_DISPLAY_SIZE,
@@ -36,8 +36,8 @@ digit_class_colors = generate_random_colors(DEBUG_DIGIT_DETECTOR_CLASS_COUNT)
 inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("🧠 Dispositivo ativo:", inference_device)
 
-card_orientation_classifier = CardOrientationClassifier.from_weights(
-    CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
+card_orientation_classifier = CardOrientationClassifier(
+    weights_path=CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
     device=inference_device,
 )
 
@@ -46,7 +46,12 @@ card_segmenter = CardSegmenter(
     confidence_threshold=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
     image_size=CARD_SEGMENTER_IMAGE_SIZE,
 )
-digit_detector = YOLO(DIGIT_DETECTOR_WEIGHTS_PATH)
+digit_detector = DigitDetector(
+    weights_path=DIGIT_DETECTOR_WEIGHTS_PATH,
+    confidence_threshold=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD,
+    image_size=DIGIT_DETECTOR_IMAGE_SIZE,
+    iou_threshold=DEBUG_DIGIT_DETECTOR_IOU_THRESHOLD,
+)
 
 # =====================================================
 # === FUNÇÃO DE CROP ROTACIONADO ======================
@@ -82,10 +87,10 @@ try:
             # YOLO SEGMENTAÇÃO
             # =================================================
             segmentation_start_time = time.time()
-            card_segmentation_result = card_segmenter.predict(frame)
+            has_predicted_cards, card_segmentation_result = card_segmenter.predict(frame)
             segmentation_time_ms = (time.time() - segmentation_start_time) * 1000
 
-            if card_segmentation_result.masks is not None:
+            if has_predicted_cards:
                 for card_polygon in card_segmentation_result.masks.xy:
 
                     card_polygon_points = np.array(card_polygon, dtype=np.float32)
@@ -126,14 +131,8 @@ try:
                     # =================================================
                     # ORIENTATION NET
                     # =================================================
-                    card_crop_image = Image.fromarray(cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB))
-                    orientation_input_tensor = card_orientation_classifier.input_image_transform(card_crop_image).unsqueeze(0).to(inference_device)
-
                     orientation_start_time = time.time()
-                    with torch.no_grad():
-                        orientation_logits = card_orientation_classifier(orientation_input_tensor)
-                        predicted_orientation_class = torch.argmax(orientation_logits, dim=1).item()
-                        orientation_angle_degrees = card_orientation_classifier.orientation_angle_by_class_id.get(predicted_orientation_class, 0)
+                    orientation_angle_degrees = card_orientation_classifier.predict(card_crop)
                     orientation_time_ms = (time.time() - orientation_start_time) * 1000
 
                     if orientation_angle_degrees == 90:
@@ -148,19 +147,16 @@ try:
                     # =================================================
                     # YOLO DÍGITOS NO CROP CORRIGIDO (APENAS AQUI)
                     # =================================================
-                    digit_detection_results = digit_detector(
-                        oriented_card_crop, conf=DIGIT_DETECTOR_CONFIDENCE_THRESHOLD, imgsz=DIGIT_DETECTOR_IMAGE_SIZE, iou=0.7, verbose=False
+                    has_detected_digits, digit_detection_result = digit_detector.predict(
+                        oriented_card_crop
                     )
-                    digit_detection_result = digit_detection_results[0]
 
                     detected_code = ""  # string final do código lido
 
-                    if digit_detection_result.boxes is not None and len(digit_detection_result.boxes) > 0:
+                    if has_detected_digits:
                         digit_boxes = digit_detection_result.boxes
                         digit_box_coordinates = digit_boxes.xyxy.cpu().numpy().astype(int)
                         digit_class_ids = digit_boxes.cls.cpu().numpy().astype(int)
-
-                        digit_class_names = digit_detector.names
 
                         # lista para ordenar os dígitos pelo eixo x (esquerda -> direita)
                         detected_digits = []
@@ -171,12 +167,7 @@ try:
                             # desenha bbox no CROP CORRIGIDO (NÃO NO DE CIMA)
                             cv2.rectangle(oriented_card_crop, (digit_left, digit_top), (digit_right, digit_bottom), digit_color, 2)
 
-                            if isinstance(digit_class_names, dict):
-                                digit_label = digit_class_names.get(digit_class_id, str(digit_class_id))
-                            else:
-                                digit_label = digit_class_names[digit_class_id] if digit_class_id < len(digit_class_names) else str(digit_class_id)
-
-                            digit_label = str(digit_label)
+                            digit_label = digit_detector.get_class_label(digit_class_id)
 
                             cv2.putText(
                                 oriented_card_crop, digit_label,

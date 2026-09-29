@@ -3,31 +3,6 @@
 from ultralytics import YOLO
 
 
-class CardSegmentationResult:
-    """Resultado de um frame, com acesso às máscaras, caixas e tracking."""
-
-    def __init__(self, yolo_result):
-        self._yolo_result = yolo_result
-
-    @property
-    def masks(self):
-        return self._yolo_result.masks
-
-    @property
-    def boxes(self):
-        return self._yolo_result.boxes
-
-    @property
-    def has_tracked_cards(self):
-        """Indica se há máscaras e IDs de rastreamento disponíveis."""
-        return (
-            self.masks is not None
-            and self.boxes is not None
-            and self.boxes.id is not None
-            and len(self.boxes) > 0
-        )
-
-
 class CardSegmenter:
     """Carrega o modelo e mantém as configurações de segmentação e tracking."""
 
@@ -45,7 +20,13 @@ class CardSegmenter:
             imgsz=self._image_size,
             verbose=False,
         )
-        return CardSegmentationResult(results[0])
+        result = results[0]
+        has_predicted_cards = (
+            result.masks is not None
+            and result.boxes is not None
+            and len(result.boxes) > 0
+        )
+        return has_predicted_cards, result
 
     def track(self, frame):
         """Segmenta um frame e mantém o tracking entre chamadas consecutivas."""
@@ -57,4 +38,12 @@ class CardSegmenter:
             imgsz=self._image_size,
             verbose=False,
         )
-        return CardSegmentationResult(results[0])
+
+        result = results[0]
+        has_tracked_cards = (
+            result.masks is not None
+            and result.boxes is not None
+            and result.boxes.id is not None
+            and len(result.boxes) > 0
+        )
+        return has_tracked_cards, result
