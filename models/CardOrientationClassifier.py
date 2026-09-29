@@ -49,7 +49,9 @@ class CardOrientationClassifier:
         """Classifica um recorte BGR e retorna o ângulo previsto em graus."""
         rgb_card_crop = cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB)
         card_image = Image.fromarray(rgb_card_crop)
-        input_tensor = self._input_transform(card_image).unsqueeze(0).to(self._device)
+        input_tensor = self._input_transform(card_image).unsqueeze(0).to(
+            self._device
+        )
 
         with torch.no_grad():
             logits = self._model(input_tensor)

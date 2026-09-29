@@ -28,12 +28,4 @@ class DigitDetector:
 
     def get_class_label(self, class_id):
         """Retorna o rótulo textual de uma classe detectada."""
-        class_names = self._model.names
-
-        if isinstance(class_names, dict):
-            return str(class_names.get(class_id, class_id))
-
-        if class_id < len(class_names):
-            return str(class_names[class_id])
-
-        return str(class_id)
+        return str(self._model.names[class_id])

@@ -6,7 +6,7 @@ from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
 from models.DigitDetector import DigitDetector
 from utils import generate_random_colors
-from capture import CaptureDevice
+from capture import FrameCapture
 
 from config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
@@ -61,7 +61,7 @@ card_readings_by_id = {}  # ID do ByteTrack -> melhor código e confiança
 logged_codes_by_card_id = {}
 
 try:
-    with CaptureDevice(
+    with FrameCapture(
         source=CAPTURE_SOURCE,
         webcam_index=WEBCAM_INDEX,
         monitor_index=MONITOR_INDEX,

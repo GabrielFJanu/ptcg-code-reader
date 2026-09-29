@@ -6,7 +6,7 @@ from models.CardSegmenter import CardSegmenter
 from models.DigitDetector import DigitDetector
 import time
 from utils import generate_random_colors
-from capture import CaptureDevice
+from capture import FrameCapture
 
 from config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
@@ -70,7 +70,7 @@ def crop_min_area_rect(source_image, rotated_rectangle):
 # === LOOP PRINCIPAL ==================================
 # =====================================================
 try:
-    with CaptureDevice(
+    with FrameCapture(
         source=CAPTURE_SOURCE,
         webcam_index=WEBCAM_INDEX,
         monitor_index=MONITOR_INDEX,
