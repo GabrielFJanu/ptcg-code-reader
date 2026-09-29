@@ -1,11 +1,22 @@
 """Classificação da orientação de cartas."""
 
+from dataclasses import dataclass
+
 import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
+
+
+@dataclass(frozen=True)
+class CardOrientationClassifierResult:
+    """Orientação prevista e confiança softmax da classe selecionada."""
+
+    angle_degrees: int
+    class_id: int
+    confidence: float
 
 
 class CardOrientationPyTorchModel(nn.Module):
@@ -40,21 +51,25 @@ class CardOrientationClassifier:
         ])
         self._angle_degrees_by_class_id = {0: 0, 2: 90, 1: 180, 3: 270}
 
-        self._model = CardOrientationPyTorchModel().to(device)
+        self._pytorch_model = CardOrientationPyTorchModel().to(device)
         model_state = torch.load(weights_path, map_location=device)
-        self._model.load_state_dict(model_state)
-        self._model.eval()
+        self._pytorch_model.load_state_dict(model_state)
+        self._pytorch_model.eval()
 
-    def predict(self, card_crop):
-        """Classifica um recorte BGR e retorna o ângulo previsto em graus."""
+    def predict(self, card_crop) -> CardOrientationClassifierResult:
+        """Classifica um recorte BGR e retorna a classe, o ângulo e a confiança."""
         rgb_card_crop = cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB)
         card_image = Image.fromarray(rgb_card_crop)
-        input_tensor = self._input_transform(card_image).unsqueeze(0).to(
-            self._device
-        )
+        input_tensor = self._input_transform(card_image).unsqueeze(0).to(self._device)
 
         with torch.no_grad():
-            logits = self._model(input_tensor)
+            logits = self._pytorch_model(input_tensor)
             predicted_class_id = torch.argmax(logits, dim=1).item()
+            class_probabilities = torch.softmax(logits, dim=1)
+            confidence = class_probabilities[0, predicted_class_id].item()
 
-        return self._angle_degrees_by_class_id[predicted_class_id]
+        return CardOrientationClassifierResult(
+            angle_degrees=self._angle_degrees_by_class_id[predicted_class_id],
+            class_id=predicted_class_id,
+            confidence=confidence,
+        )
