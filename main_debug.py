@@ -6,7 +6,8 @@ import torch
 from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
 from models.CharacterDetector import CharacterDetector
-from utils import generate_random_colors, rotate_card_crop
+from utils import generate_random_colors
+from code_reader import CodeReader
 from capture import FrameCaptureDevice
 
 from config import (
@@ -133,7 +134,7 @@ def main():
                         orientation_result = card_orientation_classifier.predict(card_crop)
                         orientation_time_ms = (time.time() - orientation_start_time) * 1000
 
-                        oriented_card_crop = rotate_card_crop(
+                        oriented_card_crop = CodeReader.rotate_card_crop(
                             card_crop, orientation_result.angle_degrees
                         )
 
