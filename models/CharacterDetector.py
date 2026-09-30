@@ -23,8 +23,8 @@ class CharacterDetectorResult:
 class CharacterDetector:
     """Carrega o modelo e mantém as configurações de detecção de caracteres."""
 
-    def __init__(self, weights_path, confidence_threshold, image_size, iou_threshold):
-        self._yolo_model = YOLO(weights_path)
+    def __init__(self, weights_path, device, confidence_threshold, image_size, iou_threshold):
+        self._yolo_model = YOLO(weights_path).to(device)
         self._confidence_threshold = confidence_threshold
         self._iou_threshold = iou_threshold
         self._image_size = image_size

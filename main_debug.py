@@ -63,12 +63,14 @@ def main():
 
     card_segmenter = CardSegmenter(
         weights_path=CARD_SEGMENTER_WEIGHTS_PATH,
+        device=inference_device,
         confidence_threshold=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
         image_size=CARD_SEGMENTER_IMAGE_SIZE,
         tracker_config=CARD_TRACKER_CONFIG,
     )
     character_detector = CharacterDetector(
         weights_path=CHARACTER_DETECTOR_WEIGHTS_PATH,
+        device=inference_device,
         confidence_threshold=CHARACTER_DETECTOR_CONFIDENCE_THRESHOLD,
         image_size=CHARACTER_DETECTOR_IMAGE_SIZE,
         iou_threshold=DEBUG_CHARACTER_DETECTOR_IOU_THRESHOLD,

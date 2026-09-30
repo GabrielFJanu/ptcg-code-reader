@@ -20,8 +20,8 @@ class CardSegmentationResult:
 class CardSegmenter:
     """Carrega o modelo e mantém as configurações de segmentação e tracking."""
 
-    def __init__(self, weights_path, confidence_threshold, image_size, tracker_config="bytetrack.yaml"):
-        self._yolo_model = YOLO(weights_path)
+    def __init__(self, weights_path, device, confidence_threshold, image_size, tracker_config="bytetrack.yaml"):
+        self._yolo_model = YOLO(weights_path).to(device)
         self._confidence_threshold = confidence_threshold
         self._image_size = image_size
         self._tracker_config = tracker_config
