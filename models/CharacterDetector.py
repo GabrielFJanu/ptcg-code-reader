@@ -40,7 +40,9 @@ class CharacterDetector:
         )
 
         result = results[0]
-        if result.boxes is None or len(result.boxes) == 0:
+        has_detected_characters = result.boxes is not None and len(result.boxes) > 0
+
+        if not has_detected_characters:
             return False, []
 
         coordinates = result.boxes.xyxy.cpu().numpy().astype(int)
@@ -49,9 +51,9 @@ class CharacterDetector:
         detections = [
             CharacterDetectorResult(
                 character=str(self._yolo_model.names[int(class_id)]),
+                bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
                 class_id=int(class_id),
                 confidence=float(confidence),
-                bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
             )
             for bounding_box, class_id, confidence in zip(
                 coordinates, class_ids, confidences

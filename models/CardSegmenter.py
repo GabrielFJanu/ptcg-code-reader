@@ -13,8 +13,8 @@ class CardSegmentationResult:
     polygon: np.ndarray
     bounding_box: tuple[int, int, int, int]
     class_id: int
-    confidence: float
     track_id: int
+    confidence: float
 
 
 class CardSegmenter:
@@ -38,12 +38,14 @@ class CardSegmenter:
         )
 
         result = results[0]
-        if (
-            result.masks is None
-            or result.boxes is None
-            or len(result.boxes) == 0
-            or result.boxes.id is None
-        ):
+        has_tracked_cards = (
+            result.masks is not None
+            and result.boxes is not None
+            and len(result.boxes) > 0
+            and result.boxes.is_track
+        )
+
+        if not has_tracked_cards:
             return False, []
 
         coordinates = result.boxes.xyxy.cpu().numpy().astype(int)
@@ -55,8 +57,8 @@ class CardSegmenter:
                 polygon=np.array(polygon, dtype=np.float32),
                 bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
                 class_id=int(class_id),
-                confidence=float(confidence),
                 track_id=track_id,
+                confidence=float(confidence),
             )
             for bounding_box, polygon, class_id, confidence, track_id in zip(
                 coordinates, result.masks.xy, class_ids, confidences, track_ids
