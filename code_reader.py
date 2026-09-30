@@ -5,12 +5,12 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 import torch
-from models.CardOrientationClassifier import CardOrientationClassifier
-from models.CardSegmenter import CardSegmenter
-from models.CharacterDetector import CharacterDetector
-from capture import FrameCaptureDevice
+from models.card_orientation_classifier import CardOrientationClassifier
+from models.card_segmenter import CardSegmenter
+from models.character_detector import CharacterDetector
+from capture import FrameCapture
 
-from config import (
+from config.config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
     CARD_TRACKER_CONFIG,
     CARD_ORIENTATION_CLASSIFIER_WEIGHTS_PATH,
@@ -29,7 +29,7 @@ from config import (
 
 
 @dataclass
-class Card:
+class CardReadingHistory:
     """Histórico de leitura de uma carta identificada pelo tracking."""
 
     track_id: int
@@ -66,12 +66,12 @@ class CodeReader:
             image_size=CHARACTER_DETECTOR_IMAGE_SIZE,
         )
 
-        self._seen_cards: dict[int, Card] = {}
+        self._seen_cards: dict[int, CardReadingHistory] = {}
 
     def run(self):
         """Captura e exibe frames até pressionar Q, liberando os recursos ao sair."""
         try:
-            with FrameCaptureDevice(
+            with FrameCapture(
                 source=CAPTURE_SOURCE,
                 webcam_index=WEBCAM_INDEX,
                 monitor_index=MONITOR_INDEX,
@@ -112,7 +112,7 @@ class CodeReader:
             oriented_card_crop = self._correct_card_orientation(card_crop)
 
             code, code_confidence = self._read_card_code(oriented_card_crop)
-            self._update_best_card_reading(
+            self._update_best_card_reading_history(
                 card_id, code, code_confidence, log_file
             )
             annotated_frame = self._draw_card(
@@ -126,7 +126,7 @@ class CodeReader:
         for card in tracked_cards:
             card_id = card.track_id
             if card_id not in self._seen_cards:
-                self._seen_cards[card_id] = Card(track_id=card_id)
+                self._seen_cards[card_id] = CardReadingHistory(track_id=card_id)
 
     @staticmethod
     def _crop_card(frame, polygon):
@@ -191,7 +191,7 @@ class CodeReader:
 
         return code, confidence_product
 
-    def _update_best_card_reading(self, card_id, code, confidence, log_file):
+    def _update_best_card_reading_history(self, card_id, code, confidence, log_file):
         """Atualiza a melhor leitura válida e registra mudanças no melhor código."""
         card = self._seen_cards[card_id]
 
@@ -206,12 +206,12 @@ class CodeReader:
         card.best_code = code
         card.best_confidence = confidence
 
-    def _draw_card(self, annotated_frame, card, card_reading: Card):
+    def _draw_card(self, annotated_frame, card, card_reading_history: CardReadingHistory):
         """Desenha a carta e sua melhor leitura no frame."""
         card_left, card_top, card_right, card_bottom = card.bounding_box
         
-        best_card_code = card_reading.best_code
-        best_code_confidence = card_reading.best_confidence
+        best_card_code = card_reading_history.best_code
+        best_code_confidence = card_reading_history.best_confidence
 
         # Amarelo enquanto não há código; verde após uma leitura válida.
         mask_color = (0, 255, 255) if best_card_code is None else (0, 255, 0)

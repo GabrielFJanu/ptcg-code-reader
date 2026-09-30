@@ -5,7 +5,7 @@ import mss
 import numpy as np
 
 
-class Webcam:
+class WebcamCapture:
     """Captura frames de uma webcam usando OpenCV."""
 
     def __init__(self, webcam_index):
@@ -29,7 +29,7 @@ class Webcam:
         self._cv2_webcam.release()
 
 
-class Screen:
+class ScreenCapture:
     """Captura frames de um monitor usando MSS."""
 
     def __init__(self, monitor_index):
@@ -55,14 +55,14 @@ class Screen:
         self._mss_screen.close()
 
 
-class FrameCaptureDevice:
+class FrameCapture:
     """Expõe uma interface única para captura de webcam ou tela."""
 
     def __init__(self, source: str, webcam_index: int = 0, monitor_index: int = 1):
         if source == "webcam":
-            self._frame_capture_device = Webcam(webcam_index)
+            self._frame_capture_device = WebcamCapture(webcam_index)
         elif source == "screen":
-            self._frame_capture_device = Screen(monitor_index)
+            self._frame_capture_device = ScreenCapture(monitor_index)
         else:
             raise ValueError('CAPTURE_SOURCE deve ser "webcam" ou "screen".')
 
