@@ -7,7 +7,7 @@ from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
 from models.CharacterDetector import CharacterDetector
 from utils import generate_random_colors, rotate_card_crop
-from capture import FrameCapture
+from capture import FrameCaptureDevice
 
 from config import (
     CARD_TRACKER_CONFIG,
@@ -77,15 +77,15 @@ def main():
     )
 
     try:
-        with FrameCapture(
+        with FrameCaptureDevice(
             source=CAPTURE_SOURCE,
             webcam_index=WEBCAM_INDEX,
             monitor_index=MONITOR_INDEX,
-        ) as capture:
+        ) as frame_capture_device:
             while True:
                 frame_start_time = time.time()
 
-                frame = capture.get_next_frame()
+                frame = frame_capture_device.get_next_frame()
 
                 annotated_frame = frame.copy()
                 card_comparison_panels = []

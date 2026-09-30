@@ -5,7 +5,7 @@ from models.CardOrientationClassifier import CardOrientationClassifier
 from models.CardSegmenter import CardSegmenter
 from models.CharacterDetector import CharacterDetector
 from utils import rotate_card_crop
-from capture import FrameCapture
+from capture import FrameCaptureDevice
 
 from config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
@@ -88,13 +88,13 @@ def main():
     logged_codes_by_card_id = {}
 
     try:
-        with FrameCapture(
+        with FrameCaptureDevice(
             source=CAPTURE_SOURCE,
             webcam_index=WEBCAM_INDEX,
             monitor_index=MONITOR_INDEX,
-        ) as capture, open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8") as card_codes_log_file:
+        ) as frame_capture_device, open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8") as card_codes_log_file:
             while True:
-                frame = capture.get_next_frame()
+                frame = frame_capture_device.get_next_frame()
                 annotated_frame = frame.copy()
 
                 # Segmentação e rastreamento das cartas.

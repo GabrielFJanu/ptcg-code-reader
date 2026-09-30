@@ -5,64 +5,64 @@ import mss
 import numpy as np
 
 
-class WebcamCapture:
+class Webcam:
     """Captura frames de uma webcam usando OpenCV."""
 
     def __init__(self, webcam_index):
-        self._webcam_capture = cv2.VideoCapture(webcam_index)
+        self._cv2_webcam = cv2.VideoCapture(webcam_index)
 
         try:
-            if not self._webcam_capture.isOpened():
+            if not self._cv2_webcam.isOpened():
                 raise RuntimeError("Erro ao iniciar webcam.")
         except Exception:
             self.close()
             raise
 
     def get_next_frame(self):
-        frame_read_success, frame = self._webcam_capture.read()
+        frame_read_success, frame = self._cv2_webcam.read()
         if not frame_read_success:
             raise RuntimeError("Não foi possível capturar um frame da webcam.")
 
         return frame
 
     def close(self):
-        self._webcam_capture.release()
+        self._cv2_webcam.release()
 
 
-class ScreenCapture:
+class Screen:
     """Captura frames de um monitor usando MSS."""
 
     def __init__(self, monitor_index):
-        self._screen_capture = mss.mss()
+        self._mss_screen = mss.mss()
 
         try:
-            available_monitors = self._screen_capture.monitors
-            if not 0 <= monitor_index < len(available_monitors):
+            monitors = self._mss_screen.monitors
+            if not 0 <= monitor_index < len(monitors):
                 raise ValueError(f"Índice de monitor inválido: {monitor_index}.")
 
             # No mss, 0 representa todos os monitores; 1 é o primeiro físico.
-            self._monitor = available_monitors[monitor_index]
+            self._monitor = monitors[monitor_index]
         except Exception:
             self.close()
             raise
 
     def get_next_frame(self):
-        screenshot = self._screen_capture.grab(self._monitor)
+        screenshot = self._mss_screen.grab(self._monitor)
         screen_frame = np.array(screenshot)
         return cv2.cvtColor(screen_frame, cv2.COLOR_BGRA2BGR)
 
     def close(self):
-        self._screen_capture.close()
+        self._mss_screen.close()
 
 
-class FrameCapture:
+class FrameCaptureDevice:
     """Expõe uma interface única para captura de webcam ou tela."""
 
     def __init__(self, source: str, webcam_index: int = 0, monitor_index: int = 1):
         if source == "webcam":
-            self._frame_capture = WebcamCapture(webcam_index)
+            self._frame_capture_device = Webcam(webcam_index)
         elif source == "screen":
-            self._frame_capture = ScreenCapture(monitor_index)
+            self._frame_capture_device = Screen(monitor_index)
         else:
             raise ValueError('CAPTURE_SOURCE deve ser "webcam" ou "screen".')
 
@@ -73,14 +73,14 @@ class FrameCapture:
         if self._is_closed:
             raise RuntimeError("O dispositivo de captura já foi fechado.")
 
-        return self._frame_capture.get_next_frame()
+        return self._frame_capture_device.get_next_frame()
 
     def close(self):
         """Libera o dispositivo; chamadas repetidas não têm efeito."""
         if self._is_closed:
             return
 
-        self._frame_capture.close()
+        self._frame_capture_device.close()
         self._is_closed = True
 
     def __enter__(self):
