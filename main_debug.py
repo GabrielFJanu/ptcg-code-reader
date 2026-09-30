@@ -93,10 +93,10 @@ def main():
 
                 # YOLO SEGMENTAÇÃO
                 segmentation_start_time = time.time()
-                has_tracked_cards, tracked_cards = card_segmenter.track(frame)
+                tracked_cards = card_segmenter.track(frame)
                 segmentation_time_ms = (time.time() - segmentation_start_time) * 1000
 
-                if has_tracked_cards:
+                if tracked_cards:
                     for card in tracked_cards:
                         card_polygon_points = card.polygon
                         card_rotated_rectangle = cv2.minAreaRect(card_polygon_points)
@@ -134,18 +134,18 @@ def main():
                         orientation_result = card_orientation_classifier.predict(card_crop)
                         orientation_time_ms = (time.time() - orientation_start_time) * 1000
 
-                        oriented_card_crop = CodeReader.rotate_card_crop(
+                        oriented_card_crop = CodeReader._rotate_card_crop(
                             card_crop, orientation_result.angle_degrees
                         )
 
                         # Caracteres detectados no recorte com orientação corrigida.
-                        has_detected_characters, detected_characters = character_detector.predict(
+                        detected_characters = character_detector.predict(
                             oriented_card_crop
                         )
 
                         detected_code = ""  # string final do código lido
 
-                        if has_detected_characters:
+                        if detected_characters:
                             for detection in detected_characters:
                                 character_left, character_top, character_right, character_bottom = detection.bounding_box
                                 character_color = character_class_colors[detection.class_id % DEBUG_CHARACTER_DETECTOR_CLASS_COUNT]

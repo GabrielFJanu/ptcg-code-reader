@@ -26,7 +26,7 @@ class CardSegmenter:
         self._image_size = image_size
         self._tracker_config = tracker_config
 
-    def track(self, frame):
+    def track(self, frame) -> list[CardSegmentationResult]:
         """Retorna cartas com IDs, mantendo o tracking entre chamadas."""
         results = self._yolo_model.track(
             frame,
@@ -38,15 +38,13 @@ class CardSegmenter:
         )
 
         result = results[0]
-        has_tracked_cards = (
-            result.masks is not None
-            and result.boxes is not None
-            and len(result.boxes) > 0
-            and result.boxes.is_track
-        )
-
-        if not has_tracked_cards:
-            return False, []
+        if (
+            result.masks is None
+            or result.boxes is None
+            or len(result.boxes) == 0
+            or not result.boxes.is_track
+        ):
+            return []
 
         coordinates = result.boxes.xyxy.cpu().numpy().astype(int)
         class_ids = result.boxes.cls.cpu().numpy().astype(int)
@@ -64,4 +62,4 @@ class CardSegmenter:
                 coordinates, result.masks.xy, class_ids, confidences, track_ids
             )
         ]
-        return True, cards
+        return cards

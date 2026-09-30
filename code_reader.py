@@ -95,9 +95,9 @@ class CodeReader:
 
         annotated_frame = frame.copy()
 
-        has_tracked_cards, tracked_cards = self._card_segmenter.track(frame)
-        
-        if not has_tracked_cards:
+        tracked_cards = self._card_segmenter.track(frame)
+
+        if not tracked_cards:
             return annotated_frame
 
         self._update_seen_cards(tracked_cards)
@@ -156,9 +156,9 @@ class CodeReader:
     def _read_card_code(self, card_crop):
         """Monta o código da esquerda para a direita e multiplica as confianças."""
 
-        has_detected_characters, characters = self._character_detector.predict(card_crop)
-        
-        if not has_detected_characters:
+        characters = self._character_detector.predict(card_crop)
+
+        if not characters:
             return "", None
 
         characters.sort(key=lambda detection: detection.center_x)
@@ -188,10 +188,11 @@ class CodeReader:
     def _draw_card(self, annotated_frame, card, card_reading: Card):
         """Desenha a carta e sua melhor leitura no frame."""
         card_left, card_top, card_right, card_bottom = card.bounding_box
-        # Amarelo enquanto não há código; verde após uma leitura válida.
+        
         best_card_code = card_reading.best_code
         best_code_confidence = card_reading.best_confidence
 
+        # Amarelo enquanto não há código; verde após uma leitura válida.
         mask_color = (0, 255, 255) if best_card_code is None else (0, 255, 0)
         card_polygon_pixels = np.array(card.polygon, dtype=np.int32)
 
@@ -199,7 +200,7 @@ class CodeReader:
         cv2.fillPoly(mask_overlay, [card_polygon_pixels], mask_color)
         annotated_frame = cv2.addWeighted(mask_overlay, 0.25, annotated_frame, 0.75, 0)
 
-        # BOUNDING BOX PADRÃO
+        # Bounding Box
         cv2.rectangle(
             annotated_frame,
             (card_left, card_top),
@@ -216,7 +217,7 @@ class CodeReader:
             0.7, (0, 255, 255), 2, cv2.LINE_AA
         )
 
-        # Melhor código lido para esta carta.
+        # Código
         if best_card_code is not None:
             best_code_confidence_percent = best_code_confidence * 100
             cv2.putText(

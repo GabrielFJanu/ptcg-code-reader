@@ -29,8 +29,8 @@ class CharacterDetector:
         self._iou_threshold = iou_threshold
         self._image_size = image_size
 
-    def predict(self, card_crop):
-        """Retorna (há detecções, lista de caracteres com rótulos resolvidos)."""
+    def predict(self, card_crop) -> list[CharacterDetectorResult]:
+        """Retorna a lista de caracteres detectados com rótulos resolvidos."""
         results = self._yolo_model.predict(
             card_crop,
             conf=self._confidence_threshold,
@@ -40,10 +40,8 @@ class CharacterDetector:
         )
 
         result = results[0]
-        has_detected_characters = result.boxes is not None and len(result.boxes) > 0
-
-        if not has_detected_characters:
-            return False, []
+        if result.boxes is None or len(result.boxes) == 0:
+            return []
 
         coordinates = result.boxes.xyxy.cpu().numpy().astype(int)
         class_ids = result.boxes.cls.cpu().numpy().astype(int)
@@ -59,4 +57,4 @@ class CharacterDetector:
                 coordinates, class_ids, confidences
             )
         ]
-        return True, detections
+        return detections
