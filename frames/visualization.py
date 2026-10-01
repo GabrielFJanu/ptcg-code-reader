@@ -36,13 +36,22 @@ class FrameVisualizer:
     def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
+    def annotate_frame(self, frame, cards, seen_cards):
+        """Retorna uma cópia anotada usando as melhores leituras das cartas."""
+        annotated_frame = frame.copy()
+        for card in cards:
+            annotated_frame = self._draw_card(
+                annotated_frame, card, seen_cards[card.track_id]
+            )
+        return annotated_frame
+
     @staticmethod
-    def draw_card(annotated_frame, card, card_reading_history):
+    def _draw_card(annotated_frame, card, seen_card):
         """Desenha a carta e sua melhor leitura no frame."""
         card_left, card_top, card_right, card_bottom = card.bounding_box
         
-        best_card_code = card_reading_history.best_code
-        best_code_confidence = card_reading_history.best_confidence
+        best_card_code = seen_card.best_code
+        best_code_confidence = seen_card.best_confidence
 
         # Amarelo enquanto não há código; verde após uma leitura válida.
         mask_color = (0, 255, 255) if best_card_code is None else (0, 255, 0)
