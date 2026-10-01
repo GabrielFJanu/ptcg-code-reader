@@ -1,6 +1,7 @@
 """Leitura, rastreamento e registro dos códigos das cartas."""
 
 from dataclasses import dataclass
+from logs.codes_log_writer import CodesLogWriter
 
 import torch
 from models.card_orientation_classifier import CardOrientationClassifier
@@ -72,14 +73,14 @@ class CodeReader:
         """Captura e exibe frames até pressionar Q, liberando os recursos ao sair."""
         with (
             FrameCapture(source=CAPTURE_SOURCE, webcam_index=WEBCAM_INDEX, monitor_index=MONITOR_INDEX) as frame_capture,
-            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as visualizer,
-            open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8") as card_codes_log_file
+            CodesLogWriter(CARD_CODES_LOG_PATH) as codes_log_writer,
+            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as visualizer
         ):
             while True:
                 frame = frame_capture.get_next_frame()
                 cards = self._detect_cards(frame)
                 updates = self._read_card_codes(frame, cards)
-                self._write_card_codes_log(card_codes_log_file, updates)
+                codes_log_writer.write_updates(updates)
                 annotated_frame = visualizer.annotate_frame(frame, cards, self._seen_cards)
                 visualizer.show(annotated_frame)
                 if visualizer.quit_requested:
@@ -110,12 +111,6 @@ class CodeReader:
             if update is not None:
                 updates.append(update)
         return updates
-
-    @staticmethod
-    def _write_card_codes_log(log_file, updates):
-        """Registra somente as mudanças de código aceitas neste frame."""
-        for card_id, code in updates:
-            log_file.write(f"{card_id},{code}\n")
 
     def _register_seen_cards(self, tracked_cards):
         """Inicializa o histórico das cartas novas e preserva as já vistas."""

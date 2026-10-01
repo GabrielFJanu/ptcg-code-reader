@@ -3,6 +3,13 @@
 import cv2
 
 
+_ROTATION_BY_ANGLE = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
+
 def crop_card(frame, polygon):
     """Alinha o retângulo mínimo da carta e retorna None para recortes vazios."""
     if len(polygon) < 3:
@@ -33,12 +40,7 @@ def crop_card(frame, polygon):
 
 def rotate_card_crop(card_crop, angle_degrees):
     """Aplica a rotação prevista pelo classificador ao recorte da carta."""
-    rotation_by_angle = {
-        90: cv2.ROTATE_90_CLOCKWISE,
-        180: cv2.ROTATE_180,
-        270: cv2.ROTATE_90_COUNTERCLOCKWISE,
-    }
-    rotation = rotation_by_angle.get(angle_degrees)
+    rotation = _ROTATION_BY_ANGLE.get(angle_degrees)
     if rotation is None:
         return card_crop
     return cv2.rotate(card_crop, rotation)
