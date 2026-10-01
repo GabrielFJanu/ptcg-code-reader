@@ -3,12 +3,12 @@
 from dataclasses import dataclass
 
 import cv2
-import numpy as np
 import torch
 from models.card_orientation_classifier import CardOrientationClassifier
 from models.card_segmenter import CardSegmenter
 from models.character_detector import CharacterDetector
 from capture import FrameCapture
+from visualization import FrameVisualizer
 
 from config.config import (
     CARD_SEGMENTER_WEIGHTS_PATH,
@@ -70,27 +70,21 @@ class CodeReader:
 
     def run(self):
         """Captura e exibe frames até pressionar Q, liberando os recursos ao sair."""
-        try:
-            with FrameCapture(
-                source=CAPTURE_SOURCE,
-                webcam_index=WEBCAM_INDEX,
-                monitor_index=MONITOR_INDEX,
-            ) as frame_capture_device, open(
-                CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8"
-            ) as card_codes_log_file:
-                while True:
-                    frame = frame_capture_device.get_next_frame()
-                    annotated_frame = self._process_frame(frame, card_codes_log_file)
-                    cv2.imshow(
-                        "ptcg-code-reader",
-                        cv2.resize(annotated_frame, FRAME_DISPLAY_SIZE),
-                    )
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
-        finally:
-            cv2.destroyAllWindows()
+        with (
+            FrameCapture(source=CAPTURE_SOURCE, webcam_index=WEBCAM_INDEX, monitor_index=MONITOR_INDEX) as frame_capture,
+            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as visualizer,
+            open(CARD_CODES_LOG_PATH, "a", buffering=1, encoding="utf-8") as card_codes_log_file
+        ):
+            while True:
+                frame = frame_capture.get_next_frame()
+                annotated_frame = self._process_frame(
+                    frame, card_codes_log_file, visualizer
+                )
+                visualizer.show(annotated_frame)
+                if visualizer.quit_requested:
+                    break
 
-    def _process_frame(self, frame, log_file):
+    def _process_frame(self, frame, log_file, visualizer):
         """Rastreia as cartas, atualiza suas leituras e retorna o frame anotado."""
 
         annotated_frame = frame.copy()
@@ -115,7 +109,7 @@ class CodeReader:
             self._update_best_card_reading_history(
                 card_id, code, code_confidence, log_file
             )
-            annotated_frame = self._draw_card(
+            annotated_frame = visualizer.draw_card(
                 annotated_frame, card, self._seen_cards[card_id]
             )
 
@@ -205,47 +199,3 @@ class CodeReader:
 
         card.best_code = code
         card.best_confidence = confidence
-
-    def _draw_card(self, annotated_frame, card, card_reading_history: CardReadingHistory):
-        """Desenha a carta e sua melhor leitura no frame."""
-        card_left, card_top, card_right, card_bottom = card.bounding_box
-        
-        best_card_code = card_reading_history.best_code
-        best_code_confidence = card_reading_history.best_confidence
-
-        # Amarelo enquanto não há código; verde após uma leitura válida.
-        mask_color = (0, 255, 255) if best_card_code is None else (0, 255, 0)
-        card_polygon_pixels = np.array(card.polygon, dtype=np.int32)
-
-        mask_overlay = annotated_frame.copy()
-        cv2.fillPoly(mask_overlay, [card_polygon_pixels], mask_color)
-        annotated_frame = cv2.addWeighted(mask_overlay, 0.25, annotated_frame, 0.75, 0)
-
-        # Bounding Box
-        cv2.rectangle(
-            annotated_frame,
-            (card_left, card_top),
-            (card_right, card_bottom),
-            mask_color,
-            1
-        )
-
-        # ID da carta
-        cv2.putText(
-            annotated_frame, f"ID {card.track_id}",
-            (card_left, max(0, card_top - 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7, (0, 255, 255), 2, cv2.LINE_AA
-        )
-
-        # Código
-        if best_card_code is not None:
-            best_code_confidence_percent = best_code_confidence * 100
-            cv2.putText(
-                annotated_frame, f"{best_card_code} ({best_code_confidence_percent:.1f}%)",
-                (card_left, max(0, card_top - 30)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (0, 255, 0), 2, cv2.LINE_AA
-            )
-
-        return annotated_frame
