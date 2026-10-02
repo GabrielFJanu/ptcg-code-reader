@@ -12,7 +12,7 @@ A live vision pipeline that locates cards, corrects their orientation, detects i
 
 <img src="docs/images/pipeline-example.png" alt="Example showing a tilted code card, its segmentation, aligned crop, orientation correction, and detected characters" width="800">
 
-<sub>Pipeline illustration from the original project presentation. The current implementation adds persistent tracking and best-reading selection.</sub>
+<sub>Card segmentation, alignment, orientation correction, and character detection. Persistent tracking and best-reading selection connect readings across frames.</sub>
 
 </div>
 
@@ -84,7 +84,7 @@ The network has **548,516 parameters**. It contains three `3 × 3` convolutional
 <p align="center">
   <img src="docs/images/character-detection.png" alt="Code card with individual alphanumeric characters enclosed in detection bounding boxes" width="640">
   <br>
-  <sub>Character detection example from the earlier presentation. The live application draws card masks, track IDs, and accepted codes on the full frame.</sub>
+  <sub>Individual character detections on a code card. The live application draws card masks, track IDs, and accepted codes on the full frame.</sub>
 </p>
 
 ### 5. Retain the strongest reading
@@ -218,18 +218,18 @@ ptcg-code-reader/
 ├── logs/
 │   └── codes_log_writer.py              # Line-buffered CSV append writer
 ├── weights/                             # Three trained checkpoints
-└── docs/images/                         # Visuals from the original presentation
+└── docs/images/                         # Pipeline and character detection examples
 ```
 
 The model wrappers return typed data objects (`SegmentedCard`, `PredictedCardOrientation`, and `DetectedCharacter`). `CodeReader` turns these into `CardReading` objects and owns the best-reading dictionary, keeping application policy separate from model inference.
 
 ## Training background
 
-The earlier project presentation describes a dataset of **more than 2,000 images** extracted from YouTube unboxing videos and controlled recordings, with bounding boxes and polygons annotated in Roboflow. It reports a **70% / 20% / 10%** train, validation, and test split and **24 alphanumeric character classes**.
+The models were developed using a dataset of **more than 2,000 images** extracted from YouTube unboxing videos and controlled recordings, with bounding boxes and polygons annotated in Roboflow. The dataset used a **70% / 20% / 10%** train, validation, and test split and **24 alphanumeric character classes**.
 
-The presentation describes transfer learning for YOLO11n-seg and YOLO11n, random initialization for OrientationNet, and AdamW training. Augmentation included blur, noise, geometric transforms, and downscaling.
+Training used transfer learning for YOLO11n-seg and YOLO11n, random initialization for the orientation CNN, and AdamW optimization. Augmentation included blur, noise, geometric transforms, and downscaling.
 
-These are historical details from the earlier project. This repository contains inference code and checkpoints, but no datasets, training scripts, or evaluation harness. Historical slide metrics should not be treated as a benchmark of the current application. Current end-to-end code accuracy and throughput remain to be measured.
+This repository contains inference code and checkpoints, but no datasets, training scripts, or evaluation harness. Current end-to-end code accuracy and throughput remain to be measured.
 
 ## Limitations and next steps
 
@@ -255,6 +255,6 @@ Useful next steps include a reproducible dependency lockfile, a labeled end-to-e
 
 ## Credits
 
-The original presentation credits **Gabriel de Freitas** and **Ezequiel Junior**. The [README images](docs/images/README.md) were extracted from that presentation and illustrate the earlier version of the project.
+Project by **Gabriel de Freitas** and **Ezequiel Junior**.
 
-Built with Ultralytics YOLO, PyTorch, torchvision, OpenCV, NumPy, Pillow, and MSS. Roboflow supported the annotation workflow described in the presentation.
+Built with Ultralytics YOLO, PyTorch, torchvision, OpenCV, NumPy, Pillow, and MSS. Roboflow supported the dataset annotation workflow.
