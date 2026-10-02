@@ -7,7 +7,7 @@ from ultralytics import YOLO
 
 
 @dataclass(frozen=True)
-class TrackedCard:
+class SegmentedCard:
     """Carta segmentada, com coordenadas no frame e ID de tracking."""
 
     polygon: np.ndarray
@@ -33,7 +33,7 @@ class CardSegmenter:
         self._inference_image_size = inference_image_size
         self._tracker_config = tracker_config
 
-    def track(self, frame) -> list[TrackedCard]:
+    def track(self, frame) -> list[SegmentedCard]:
         """Retorna cartas com IDs, mantendo o tracking entre chamadas."""
         frame_results = self._yolo_model.track(
             frame,
@@ -57,8 +57,8 @@ class CardSegmenter:
         class_ids = frame_result.boxes.cls.cpu().numpy().astype(int)
         confidences = frame_result.boxes.conf.cpu().numpy()
         track_ids = frame_result.boxes.id.int().cpu().tolist()
-        tracked_cards = [
-            TrackedCard(
+        segmented_cards = [
+            SegmentedCard(
                 polygon=np.array(polygon, dtype=np.float32),
                 bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
                 class_id=int(class_id),
@@ -69,4 +69,4 @@ class CardSegmenter:
                 bounding_boxes, frame_result.masks.xy, class_ids, confidences, track_ids
             )
         ]
-        return tracked_cards
+        return segmented_cards

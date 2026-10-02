@@ -26,7 +26,7 @@ from frames.processing import crop_card, rotate_card_crop
 from frames.display import FrameDisplay
 from logs.codes_log_writer import CodesLogWriter
 from models.card_orientation_classifier import CardOrientationClassifier
-from models.card_segmenter import CardSegmenter, TrackedCard
+from models.card_segmenter import CardSegmenter, SegmentedCard
 from models.character_detector import CharacterDetector
 
 
@@ -86,24 +86,24 @@ class CodeReader:
         ):
             while True:
                 frame = frame_capture.get_next_frame()
-                tracked_cards = self._card_segmenter.track(frame)
-                card_readings = self._read_card_codes(frame, tracked_cards)
+                segmented_cards = self._card_segmenter.track(frame)
+                card_readings = self._read_card_codes(frame, segmented_cards)
                 changed_code_readings = self._update_best_card_readings(card_readings)
                 codes_log_writer.write_readings(changed_code_readings)
                 annotated_frame = annotate_frame(
-                    frame, tracked_cards, self._best_card_readings_by_track_id
+                    frame, segmented_cards, self._best_card_readings_by_track_id
                 )
                 frame_display.show(annotated_frame)
                 if frame_display.quit_requested:
                     break
 
     def _read_card_codes(
-        self, frame, tracked_cards: list[TrackedCard]
+        self, frame, segmented_cards: list[SegmentedCard]
     ) -> list[CardReading]:
         """Reúne as leituras obtidas para as cartas do frame."""
         card_readings = []
-        for tracked_card in tracked_cards:
-            card_reading = self._read_card_code(frame, tracked_card)
+        for segmented_card in segmented_cards:
+            card_reading = self._read_card_code(frame, segmented_card)
             if card_reading is not None:
                 card_readings.append(card_reading)
         return card_readings
@@ -124,27 +124,27 @@ class CodeReader:
         predicted_orientation = self._card_orientation_classifier.predict(card_crop)
         return rotate_card_crop(card_crop, predicted_orientation.angle_degrees)
 
-    def _read_card_code(self, frame, tracked_card: TrackedCard) -> CardReading | None:
+    def _read_card_code(self, frame, segmented_card: SegmentedCard) -> CardReading | None:
         """Recorta, orienta e lê a carta; sem recorte ou caracteres, retorna None."""
-        card_crop = crop_card(frame, tracked_card.polygon)
+        card_crop = crop_card(frame, segmented_card.polygon)
         if card_crop is None:
             return None
 
         oriented_card_crop = self._correct_card_orientation(card_crop)
-        character_detections = self._character_detector.predict(oriented_card_crop)
+        detected_characters = self._character_detector.predict(oriented_card_crop)
 
-        if not character_detections:
+        if not detected_characters:
             return None
 
-        character_detections.sort(key=lambda detection: detection.center_x)
-        code = "".join(detection.character for detection in character_detections)
+        detected_characters.sort(key=lambda detection: detection.center_x)
+        code = "".join(detection.character for detection in detected_characters)
 
         confidence_product = 1.0
-        for detection in character_detections:
+        for detection in detected_characters:
             confidence_product *= detection.confidence
 
         return CardReading(
-            track_id=tracked_card.track_id, code=code, confidence=confidence_product
+            track_id=segmented_card.track_id, code=code, confidence=confidence_product
         )
 
     def _update_best_card_reading(self, reading: CardReading) -> CardReading | None:

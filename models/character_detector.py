@@ -6,7 +6,7 @@ from ultralytics import YOLO
 
 
 @dataclass(frozen=True)
-class CharacterDetection:
+class DetectedCharacter:
     """Caractere detectado, com rótulo e coordenadas no recorte da carta."""
 
     character: str
@@ -36,7 +36,7 @@ class CharacterDetector:
         self._iou_threshold = iou_threshold
         self._inference_image_size = inference_image_size
 
-    def predict(self, card_crop) -> list[CharacterDetection]:
+    def predict(self, card_crop) -> list[DetectedCharacter]:
         """Retorna a lista de caracteres detectados com rótulos resolvidos."""
         card_results = self._yolo_model.predict(
             card_crop,
@@ -53,8 +53,8 @@ class CharacterDetector:
         bounding_boxes = card_result.boxes.xyxy.cpu().numpy().astype(int)
         class_ids = card_result.boxes.cls.cpu().numpy().astype(int)
         confidences = card_result.boxes.conf.cpu().numpy()
-        character_detections = [
-            CharacterDetection(
+        detected_characters = [
+            DetectedCharacter(
                 character=str(self._yolo_model.names[int(class_id)]),
                 bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
                 class_id=int(class_id),
@@ -64,4 +64,4 @@ class CharacterDetector:
                 bounding_boxes, class_ids, confidences
             )
         ]
-        return character_detections
+        return detected_characters

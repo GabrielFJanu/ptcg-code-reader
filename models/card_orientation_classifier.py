@@ -32,7 +32,7 @@ class CardOrientationPyTorchModel(nn.Module):
 
 
 @dataclass(frozen=True)
-class CardOrientationPrediction:
+class PredictedCardOrientation:
     """Orientação prevista e confiança softmax da classe selecionada."""
 
     angle_degrees: int
@@ -62,7 +62,7 @@ class CardOrientationClassifier:
             3: 270,
         }
 
-    def predict(self, card_crop) -> CardOrientationPrediction:
+    def predict(self, card_crop) -> PredictedCardOrientation:
         """Classifica um recorte BGR e retorna a classe, o ângulo e a confiança."""
         input_tensor = self._prepare_input_tensor(card_crop)
 
@@ -72,7 +72,7 @@ class CardOrientationClassifier:
             class_probabilities = torch.softmax(logits, dim=1)
             confidence = class_probabilities[0, predicted_class_id].item()
 
-        return CardOrientationPrediction(
+        return PredictedCardOrientation(
             angle_degrees=self._angle_degrees_by_class_id[predicted_class_id],
             class_id=predicted_class_id,
             confidence=confidence,
