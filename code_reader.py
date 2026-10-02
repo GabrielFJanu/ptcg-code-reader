@@ -20,9 +20,10 @@ from config.config import (
     MONITOR_INDEX,
     WEBCAM_INDEX,
 )
+from frames.annotation import annotate_frame
 from frames.capture import FrameCapture
 from frames.processing import crop_card, rotate_card_crop
-from frames.visualization import FrameVisualizer
+from frames.display import FrameDisplay
 from logs.codes_log_writer import CodesLogWriter
 from models.card_orientation_classifier import CardOrientationClassifier
 from models.card_segmenter import CardSegmenter, TrackedCard
@@ -81,7 +82,7 @@ class CodeReader:
                 monitor_index=MONITOR_INDEX,
             ) as frame_capture,
             CodesLogWriter(CARD_CODES_LOG_PATH) as codes_log_writer,
-            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as frame_visualizer,
+            FrameDisplay(display_size=FRAME_DISPLAY_SIZE) as frame_display,
         ):
             while True:
                 frame = frame_capture.get_next_frame()
@@ -89,11 +90,11 @@ class CodeReader:
                 card_readings = self._read_card_codes(frame, tracked_cards)
                 changed_code_readings = self._update_best_card_readings(card_readings)
                 codes_log_writer.write_readings(changed_code_readings)
-                annotated_frame = frame_visualizer.annotate_frame(
+                annotated_frame = annotate_frame(
                     frame, tracked_cards, self._best_card_readings_by_track_id
                 )
-                frame_visualizer.show(annotated_frame)
-                if frame_visualizer.quit_requested:
+                frame_display.show(annotated_frame)
+                if frame_display.quit_requested:
                     break
 
     def _read_card_codes(
