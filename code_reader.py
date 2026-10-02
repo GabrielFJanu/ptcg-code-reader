@@ -21,8 +21,8 @@ from config.config import (
     MONITOR_INDEX,
     CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
     CHARACTER_DETECTOR_CONFIDENCE_THRESHOLD,
-    CARD_SEGMENTER_IMAGE_SIZE,
-    CHARACTER_DETECTOR_IMAGE_SIZE,
+    CARD_SEGMENTER_INFERENCE_IMAGE_SIZE,
+    CHARACTER_DETECTOR_INFERENCE_IMAGE_SIZE,
     CHARACTER_DETECTOR_IOU_THRESHOLD,
     FRAME_DISPLAY_SIZE,
     CARD_CODES_LOG_PATH,
@@ -30,12 +30,12 @@ from config.config import (
 
 
 @dataclass
-class SeenCard:
-    """Carta identificada pelo tracking e sua melhor leitura."""
+class CardReading:
+    """Leitura de código de uma carta identificada pelo tracking."""
 
     track_id: int
-    best_code: str | None = None
-    best_confidence: float = 0.0
+    code: str
+    confidence: float
 
 
 class CodeReader:
@@ -56,7 +56,7 @@ class CodeReader:
             weights_path=CARD_SEGMENTER_WEIGHTS_PATH,
             device=self._device,
             confidence_threshold=CARD_SEGMENTER_CONFIDENCE_THRESHOLD,
-            image_size=CARD_SEGMENTER_IMAGE_SIZE,
+            inference_image_size=CARD_SEGMENTER_INFERENCE_IMAGE_SIZE,
             tracker_config=CARD_TRACKER_CONFIG,
         )
         self._character_detector = CharacterDetector(
@@ -64,95 +64,91 @@ class CodeReader:
             device=self._device,
             confidence_threshold=CHARACTER_DETECTOR_CONFIDENCE_THRESHOLD,
             iou_threshold=CHARACTER_DETECTOR_IOU_THRESHOLD,
-            image_size=CHARACTER_DETECTOR_IMAGE_SIZE,
+            inference_image_size=CHARACTER_DETECTOR_INFERENCE_IMAGE_SIZE,
         )
 
-        self._seen_cards: dict[int, SeenCard] = {}
+        self._best_card_readings_by_track_id: dict[int, CardReading] = {}
 
     def run(self):
         """Captura e exibe frames até pressionar Q, liberando os recursos ao sair."""
         with (
             FrameCapture(source=CAPTURE_SOURCE, webcam_index=WEBCAM_INDEX, monitor_index=MONITOR_INDEX) as frame_capture,
             CodesLogWriter(CARD_CODES_LOG_PATH) as codes_log_writer,
-            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as visualizer
+            FrameVisualizer(display_size=FRAME_DISPLAY_SIZE) as frame_visualizer
         ):
             while True:
                 frame = frame_capture.get_next_frame()
-                cards = self._detect_cards(frame)
-                updates = self._read_card_codes(frame, cards)
-                codes_log_writer.write_updates(updates)
-                annotated_frame = visualizer.annotate_frame(frame, cards, self._seen_cards)
-                visualizer.show(annotated_frame)
-                if visualizer.quit_requested:
+                tracked_cards = self._card_segmenter.track(frame)
+                card_readings = self._read_card_codes(frame, tracked_cards)
+                changed_code_readings = self._update_best_card_readings(card_readings)
+                codes_log_writer.write_readings(changed_code_readings)
+                annotated_frame = frame_visualizer.annotate_frame(
+                    frame, tracked_cards, self._best_card_readings_by_track_id
+                )
+                frame_visualizer.show(annotated_frame)
+                if frame_visualizer.quit_requested:
                     break
 
-    def _detect_cards(self, frame):
-        """Rastreia as cartas e inicializa o histórico das novas detecções."""
-        cards = self._card_segmenter.track(frame)
-        self._register_seen_cards(cards)
-        return cards
+    def _read_card_codes(self, frame, tracked_cards) -> list[CardReading]:
+        """Reúne as leituras obtidas para as cartas do frame."""
+        card_readings = []
+        for tracked_card in tracked_cards:
+            card_reading = self._read_card_code(frame, tracked_card)
+            if card_reading is not None:
+                card_readings.append(card_reading)
+        return card_readings
 
-    def _read_card_codes(self, frame, cards):
-        """Atualiza as melhores leituras e retorna os códigos que mudaram."""
-        updates = []
-        for card in cards:
-            card_id = card.track_id
-
-            card_crop = crop_card(frame, card.polygon)
-            if card_crop is None:
-                continue
-
-            oriented_card_crop = self._correct_card_orientation(card_crop)
-
-            code, code_confidence = self._read_card_code(oriented_card_crop)
-            update = self._update_seen_card(
-                card_id, code, code_confidence
-            )
-            if update is not None:
-                updates.append(update)
-        return updates
-
-    def _register_seen_cards(self, tracked_cards):
-        """Inicializa o histórico das cartas novas e preserva as já vistas."""
-        for card in tracked_cards:
-            card_id = card.track_id
-            if card_id not in self._seen_cards:
-                self._seen_cards[card_id] = SeenCard(track_id=card_id)
+    def _update_best_card_readings(
+        self, card_readings: list[CardReading]
+    ) -> list[CardReading]:
+        """Atualiza as melhores leituras e retorna aquelas cujo código mudou."""
+        changed_code_readings = []
+        for card_reading in card_readings:
+            changed_code_reading = self._update_best_card_reading(card_reading)
+            if changed_code_reading is not None:
+                changed_code_readings.append(changed_code_reading)
+        return changed_code_readings
 
     def _correct_card_orientation(self, card_crop):
         """Identifica a orientação da carta e retorna o recorte corrigido."""
-        orientation = self._card_orientation_classifier.predict(card_crop)
-        return rotate_card_crop(card_crop, orientation.angle_degrees)
+        predicted_orientation = self._card_orientation_classifier.predict(card_crop)
+        return rotate_card_crop(card_crop, predicted_orientation.angle_degrees)
 
-    def _read_card_code(self, card_crop):
-        """Monta o código da esquerda para a direita e multiplica as confianças."""
+    def _read_card_code(self, frame, tracked_card) -> CardReading | None:
+        """Recorta, orienta e lê a carta; sem recorte ou caracteres, retorna None."""
+        card_crop = crop_card(frame, tracked_card.polygon)
+        if card_crop is None:
+            return None
 
-        characters = self._character_detector.predict(card_crop)
+        oriented_card_crop = self._correct_card_orientation(card_crop)
+        character_detections = self._character_detector.predict(oriented_card_crop)
 
-        if not characters:
-            return "", None
+        if not character_detections:
+            return None
 
-        characters.sort(key=lambda detection: detection.center_x)
-        code = "".join(detection.character for detection in characters)
+        character_detections.sort(key=lambda detection: detection.center_x)
+        code = "".join(detection.character for detection in character_detections)
 
         confidence_product = 1.0
-        for detection in characters:
+        for detection in character_detections:
             confidence_product *= detection.confidence
 
-        return code, confidence_product
+        return CardReading(
+            track_id=tracked_card.track_id, code=code, confidence=confidence_product
+        )
 
-    def _update_seen_card(self, card_id, code, confidence):
-        """Atualiza a melhor leitura válida e retorna uma mudança de código."""
-        card = self._seen_cards[card_id]
+    def _update_best_card_reading(self, reading: CardReading) -> CardReading | None:
+        """Atualiza a melhor leitura válida e a retorna apenas se o código mudou."""
+        if len(reading.code) != 13:
+            return None
 
-        if len(code) != 13:
-            return
-        if confidence <= card.best_confidence:
-            return
+        best_card_reading = self._best_card_readings_by_track_id.get(reading.track_id)
+        if best_card_reading is not None:
+            if reading.confidence <= best_card_reading.confidence:
+                return None
 
-        code_changed = code != card.best_code
-
-        card.best_code = code
-        card.best_confidence = confidence
+        code_changed = best_card_reading is None or reading.code != best_card_reading.code
+        self._best_card_readings_by_track_id[reading.track_id] = reading
         if code_changed:
-            return card_id, code
+            return reading
+        return None

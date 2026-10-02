@@ -11,8 +11,8 @@ WEBCAM_INDEX = 0  # Índice da câmera usada quando a fonte é "webcam".
 MONITOR_INDEX = 1  # 1 = primeiro monitor; 0 = área de todos os monitores.
 CARD_SEGMENTER_CONFIDENCE_THRESHOLD = 0.5
 CHARACTER_DETECTOR_CONFIDENCE_THRESHOLD = 0.5
-CARD_SEGMENTER_IMAGE_SIZE = 448
-CHARACTER_DETECTOR_IMAGE_SIZE = 640
+CARD_SEGMENTER_INFERENCE_IMAGE_SIZE = 448
+CHARACTER_DETECTOR_INFERENCE_IMAGE_SIZE = 640
 CHARACTER_DETECTOR_IOU_THRESHOLD = 0.8
 
 # Tracker integrado ao Ultralytics (configuração incluída na biblioteca).

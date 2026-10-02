@@ -32,7 +32,7 @@ class CardOrientationPyTorchModel(nn.Module):
 
 
 @dataclass(frozen=True)
-class CardOrientationClassifierResult:
+class CardOrientationPrediction:
     """Orientação prevista e confiança softmax da classe selecionada."""
 
     angle_degrees: int
@@ -44,10 +44,9 @@ class CardOrientationClassifier:
     """Carrega o modelo e encapsula a classificação da orientação de cartas."""
 
     def __init__(self, weights_path, device):
-        
         self._pytorch_model = CardOrientationPyTorchModel().to(device)
-        model_state = torch.load(weights_path, map_location=device)
-        self._pytorch_model.load_state_dict(model_state)
+        model_state_dict = torch.load(weights_path, map_location=device)
+        self._pytorch_model.load_state_dict(model_state_dict)
         self._pytorch_model.eval()
 
         self._device = device
@@ -63,9 +62,9 @@ class CardOrientationClassifier:
             3: 270,
         }
 
-    def predict(self, card_crop) -> CardOrientationClassifierResult:
+    def predict(self, card_crop) -> CardOrientationPrediction:
         """Classifica um recorte BGR e retorna a classe, o ângulo e a confiança."""
-        input_tensor = self._preprocess_input(card_crop)
+        input_tensor = self._prepare_input_tensor(card_crop)
 
         with torch.no_grad():
             logits = self._pytorch_model(input_tensor)
@@ -73,18 +72,14 @@ class CardOrientationClassifier:
             class_probabilities = torch.softmax(logits, dim=1)
             confidence = class_probabilities[0, predicted_class_id].item()
 
-        return CardOrientationClassifierResult(
-            angle_degrees=self._class_id_to_angle_degrees(predicted_class_id),
+        return CardOrientationPrediction(
+            angle_degrees=self._angle_degrees_by_class_id[predicted_class_id],
             class_id=predicted_class_id,
             confidence=confidence,
         )
 
-    def _preprocess_input(self, card_crop) -> torch.Tensor:
+    def _prepare_input_tensor(self, card_crop) -> torch.Tensor:
         """Converte um recorte BGR em um tensor de entrada no dispositivo do modelo."""
         rgb_card_crop = cv2.cvtColor(card_crop, cv2.COLOR_BGR2RGB)
         card_image = Image.fromarray(rgb_card_crop)
         return self._input_transform(card_image).unsqueeze(0).to(self._device)
-
-    def _class_id_to_angle_degrees(self, class_id: int) -> int:
-        """Converte o identificador da classe no ângulo correspondente em graus."""
-        return self._angle_degrees_by_class_id[class_id]

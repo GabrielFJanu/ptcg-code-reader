@@ -7,7 +7,7 @@ from ultralytics import YOLO
 
 
 @dataclass(frozen=True)
-class CardSegmentationResult:
+class TrackedCard:
     """Carta segmentada, com coordenadas no frame e ID de tracking."""
 
     polygon: np.ndarray
@@ -20,38 +20,45 @@ class CardSegmentationResult:
 class CardSegmenter:
     """Carrega o modelo e mantém as configurações de segmentação e tracking."""
 
-    def __init__(self, weights_path, device, confidence_threshold, image_size, tracker_config="bytetrack.yaml"):
+    def __init__(
+        self,
+        weights_path,
+        device,
+        confidence_threshold,
+        inference_image_size,
+        tracker_config="bytetrack.yaml",
+    ):
         self._yolo_model = YOLO(weights_path).to(device)
         self._confidence_threshold = confidence_threshold
-        self._image_size = image_size
+        self._inference_image_size = inference_image_size
         self._tracker_config = tracker_config
 
-    def track(self, frame) -> list[CardSegmentationResult]:
+    def track(self, frame) -> list[TrackedCard]:
         """Retorna cartas com IDs, mantendo o tracking entre chamadas."""
-        results = self._yolo_model.track(
+        frame_results = self._yolo_model.track(
             frame,
             persist=True,
             tracker=self._tracker_config,
             conf=self._confidence_threshold,
-            imgsz=self._image_size,
+            imgsz=self._inference_image_size,
             verbose=False,
         )
 
-        result = results[0]
+        frame_result = frame_results[0]
         if (
-            result.masks is None
-            or result.boxes is None
-            or len(result.boxes) == 0
-            or not result.boxes.is_track
+            frame_result.masks is None
+            or frame_result.boxes is None
+            or len(frame_result.boxes) == 0
+            or not frame_result.boxes.is_track
         ):
             return []
 
-        coordinates = result.boxes.xyxy.cpu().numpy().astype(int)
-        class_ids = result.boxes.cls.cpu().numpy().astype(int)
-        confidences = result.boxes.conf.cpu().numpy()
-        track_ids = result.boxes.id.int().cpu().tolist()
-        cards = [
-            CardSegmentationResult(
+        bounding_boxes = frame_result.boxes.xyxy.cpu().numpy().astype(int)
+        class_ids = frame_result.boxes.cls.cpu().numpy().astype(int)
+        confidences = frame_result.boxes.conf.cpu().numpy()
+        track_ids = frame_result.boxes.id.int().cpu().tolist()
+        tracked_cards = [
+            TrackedCard(
                 polygon=np.array(polygon, dtype=np.float32),
                 bounding_box=tuple(int(coordinate) for coordinate in bounding_box),
                 class_id=int(class_id),
@@ -59,7 +66,7 @@ class CardSegmenter:
                 confidence=float(confidence),
             )
             for bounding_box, polygon, class_id, confidence, track_id in zip(
-                coordinates, result.masks.xy, class_ids, confidences, track_ids
+                bounding_boxes, frame_result.masks.xy, class_ids, confidences, track_ids
             )
         ]
-        return cards
+        return tracked_cards
