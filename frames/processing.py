@@ -1,5 +1,7 @@
 """Recorte e rotação das imagens de cartas para leitura pelos modelos."""
 
+from math import ceil
+
 import cv2
 
 
@@ -11,7 +13,7 @@ _CV2_ROTATION_BY_ANGLE_DEGREES = {
 
 
 def crop_card(frame, polygon):
-    """Alinha o retângulo mínimo da carta e retorna None para recortes vazios."""
+    """Alinha a carta diretamente no recorte, sem rotacionar o frame inteiro."""
     if len(polygon) < 3:
         return None
 
@@ -21,21 +23,21 @@ def crop_card(frame, polygon):
     if width <= 0 or height <= 0:
         return None
 
+    crop_width, crop_height = ceil(width), ceil(height)
     rotation_matrix = cv2.getRotationMatrix2D(
         rectangle_center, angle_degrees, 1.0
     )
-    rotated_frame = cv2.warpAffine(
+    # Leva o centro da carta ao centro do destino, inclusive nas bordas do frame.
+    rotation_matrix[0, 2] += (crop_width - 1) / 2 - center_x
+    rotation_matrix[1, 2] += (crop_height - 1) / 2 - center_y
+    return cv2.warpAffine(
         frame,
         rotation_matrix,
-        (frame.shape[1], frame.shape[0]),
+        (crop_width, crop_height),
         flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
-    left = max(0, int(center_x - width / 2))
-    top = max(0, int(center_y - height / 2))
-    right = min(frame.shape[1], int(center_x + width / 2))
-    bottom = min(frame.shape[0], int(center_y + height / 2))
-    card_crop = rotated_frame[top:bottom, left:right]
-    return card_crop if card_crop.size > 0 else None
 
 
 def rotate_card_crop(card_crop, angle_degrees):
