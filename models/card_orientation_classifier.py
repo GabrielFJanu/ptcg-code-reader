@@ -10,6 +10,14 @@ from PIL import Image
 from torchvision import transforms
 
 
+_ANGLE_DEGREES_BY_CLASS_ID = {
+    0: 0,
+    2: 90,
+    1: 180,
+    3: 270,
+}
+
+
 class CardOrientationPyTorchModel(nn.Module):
     """Rede neural PyTorch que classifica a orientação de uma carta."""
 
@@ -55,12 +63,6 @@ class CardOrientationClassifier:
             transforms.Resize((64, 64)),
             transforms.ToTensor(),
         ])
-        self._angle_degrees_by_class_id = {
-            0: 0,
-            2: 90,
-            1: 180,
-            3: 270,
-        }
 
     def predict(self, card_crop) -> PredictedCardOrientation:
         """Classifica um recorte BGR e retorna a classe, o ângulo e a confiança."""
@@ -73,7 +75,7 @@ class CardOrientationClassifier:
             confidence = class_probabilities[0, predicted_class_id].item()
 
         return PredictedCardOrientation(
-            angle_degrees=self._angle_degrees_by_class_id[predicted_class_id],
+            angle_degrees=_ANGLE_DEGREES_BY_CLASS_ID[predicted_class_id],
             class_id=predicted_class_id,
             confidence=confidence,
         )

@@ -47,7 +47,8 @@ class CharacterDetector:
         )
 
         card_result = card_results[0]
-        if card_result.boxes is None or len(card_result.boxes) == 0:
+        has_boxes = card_result.boxes is not None and len(card_result.boxes) > 0
+        if not has_boxes:
             return []
 
         bounding_boxes = card_result.boxes.xyxy.cpu().numpy().astype(int)

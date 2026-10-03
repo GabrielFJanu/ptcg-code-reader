@@ -45,12 +45,10 @@ class CardSegmenter:
         )
 
         frame_result = frame_results[0]
-        if (
-            frame_result.masks is None
-            or frame_result.boxes is None
-            or len(frame_result.boxes) == 0
-            or not frame_result.boxes.is_track
-        ):
+        has_masks = frame_result.masks is not None
+        has_boxes = frame_result.boxes is not None and len(frame_result.boxes) > 0
+        has_tracked_boxes = has_boxes and frame_result.boxes.is_track
+        if not has_masks or not has_tracked_boxes:
             return []
 
         bounding_boxes = frame_result.boxes.xyxy.cpu().numpy().astype(int)
