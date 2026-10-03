@@ -1,0 +1,17 @@
+# Versions from the maintainer's successful application run (Python 3.12+).
+# Core dependencies are pinned; this is not a full transitive lockfile.
+# Install the CPU/CUDA build of torch and torchvision first (see README).
+torch==2.11.0
+torchvision==0.26.0
+
+ultralytics==8.4.171
+
+# Capture, image processing, and tracking.
+opencv-python==5.0.0.93
+Pillow==12.3.0
+mss==10.2.0
+lap==0.5.13
+
+# Preserve the working NumPy/SciPy combination used by Ultralytics.
+numpy==2.5.3
+scipy==1.18.1
