@@ -108,7 +108,7 @@ python -m pip install -r requirements.txt
 python -m pip check
 ```
 
-[`requirements.txt`](requirements.txt) pins the project's dependencies to versions from a successful run with CUDA 12.8. It accepts either CPU or CUDA builds of the specified PyTorch versions. These are tested versions, not minimum requirements or a complete transitive lockfile; other platforms have not been systematically tested.
+[`requirements.txt`](requirements.txt) pins the project's dependencies to versions from a successful run. It accepts either CPU or CUDA builds of the specified PyTorch versions. These are tested versions, not minimum requirements or a complete transitive lockfile; other platforms have not been systematically tested.
 
 ### 3. Run
 
