@@ -233,6 +233,6 @@ This repository contains inference code and checkpoints, but no datasets, traini
 
 ## Credits
 
-Project by **Gabriel de Freitas Januário** and **Ezequiel Junior**.
+Project by **Gabriel de Freitas Januário** and **Ezequiel Amador Soares Junior**.
 
 Built with Ultralytics YOLO, PyTorch, torchvision, OpenCV, NumPy, Pillow, and MSS. Roboflow supported the dataset annotation workflow.
