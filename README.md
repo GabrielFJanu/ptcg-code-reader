@@ -12,22 +12,21 @@ A live vision pipeline that locates cards, corrects their orientation, detects i
 
 <img src="docs/images/pipeline-example.png" alt="Example showing a tilted code card, its segmentation, aligned crop, orientation correction, and detected characters" width="800">
 
-<sub>Card segmentation, alignment, orientation correction, and character detection. Persistent tracking and best-reading selection connect readings across frames.</sub>
+<sub>Card segmentation, alignment, orientation correction, and character detection.</sub>
 
 </div>
 
 ## Overview
 
-Redemption cards can appear briefly in a camera feed, at an angle, or upside down. Reading their small alphanumeric codes requires more than locating a text region: the system must isolate the card, establish a consistent reading direction, and handle changing predictions across frames.
+Redemption cards can appear briefly in a camera feed, tilted or upside down. PTCG Code Reader isolates each card, corrects its orientation, and reads its printed code across successive frames.
 
-PTCG Code Reader combines two YOLO11 models with a custom PyTorch orientation classifier. It accepts a webcam or a screen capture, displays annotated cards, and appends accepted readings to a CSV file. All three trained model weights are included in this repository.
+The application combines two YOLO11 models with a custom PyTorch CNN. It accepts webcam or screen capture input, displays annotated cards, and saves accepted readings to CSV. **All three trained model weights are included.**
 
-### What the project demonstrates
+### Highlights
 
-- **A complete inference pipeline:** instance segmentation, geometric alignment, orientation classification, and character detection work together in a continuous capture loop.
-- **Temporal state management:** ByteTrack associates detections across frames, while the application retains the strongest accepted reading for each track.
-- **Custom neural network integration:** a compact CNN resolves the four possible right-angle orientations before character recognition.
-- **Modular application design:** model wrappers, capture, image processing, visualization, and logging have separate responsibilities. Context managers release capture devices, files, and display windows.
+- **Persistent tracking** with ByteTrack and best-reading selection for each card.
+- **Custom orientation CNN** with 548,516 parameters and four rotation classes.
+- **Modular Python implementation** separating model inference, image processing, capture, and logging.
 
 The application reads the printed code. It does not decode the QR code, submit codes, or check whether they can be redeemed.
 
@@ -37,54 +36,35 @@ The application reads the printed code. It does not decode the QR code, submit c
 flowchart TD
     A[Webcam or screen capture] --> B[YOLO11n-seg + ByteTrack]
     B --> C[For each tracked card: aligned crop]
-    C --> D[Orientation CNN: 0, 90, 180, or 270 degrees]
-    D --> E[Rotate crop upright]
-    E --> F[YOLO11n character detection]
-    F --> G[Sort characters left to right]
-    G --> H{13-character code and higher score?}
-    H -->|Yes| I[Update best reading for track]
-    I --> J{First reading or changed code?}
-    J -->|Yes| K[Append track ID and code to CSV]
-    H -->|No| L[Keep previous best reading]
-    J -->|No| M[Draw current cards and best readings]
-    K --> M
-    L --> M
-    M --> N{q pressed?}
-    N -->|No| A
-    N -->|Yes| O[Release resources]
+    C --> D[Orientation CNN + rotation correction]
+    D --> E[YOLO11n character detection]
+    E --> F[Assemble code and select best reading]
+    F --> G[Annotated preview]
+    F --> H[Log accepted code changes to CSV]
 ```
 
 ### 1. Locate and track cards
 
-[`CardSegmenter`](models/card_segmenter.py) runs YOLO instance segmentation with `persist=True` and the bundled Ultralytics `bytetrack.yaml` configuration. Each tracked card includes a polygon, bounding box, class, confidence, and track ID. The default segmentation inference size is `448`.
+[`CardSegmenter`](models/card_segmenter.py) uses YOLO11n-seg to locate and segment each card, producing a polygon that outlines its shape for the alignment and cropping stage. ByteTrack associates the cards across frames.
 
 ### 2. Align the crop
 
-[`crop_card`](frames/processing.py) fits a minimum-area rectangle to the segmentation polygon with `cv2.minAreaRect`. It uses an affine transform to rotate and translate the card directly into its crop, avoiding rotation of the entire frame. Invalid polygons or zero-sized rectangles are skipped.
-
-This corrects in-plane tilt. It does not perform a four-corner perspective rectification.
+[`crop_card`](frames/processing.py) fits a minimum-area rectangle to the segmentation polygon, then applies an affine transform to align its edges with the image axes and extract the card. This removes the card's in-plane tilt, but its rectangular outline alone cannot reveal which way the printed content should face. The aligned crop may still be sideways or upside down.
 
 ### 3. Resolve orientation
 
-[`CardOrientationClassifier`](models/card_orientation_classifier.py) converts the crop from BGR to RGB, resizes it to `64 × 64`, and applies a custom CNN. The predicted class determines the corrective rotation:
+[`CardOrientationClassifier`](models/card_orientation_classifier.py) resolves this remaining ambiguity using the card's visual content. It processes a `64 × 64` crop and predicts a corrective rotation of **0°, 90°, 180°, or 270°**, which is applied before character detection. For example, an upside-down card can have perfectly aligned edges after cropping and still require a 180° rotation to make its code readable from left to right.
 
-| Class ID | Clockwise rotation |
-| :---: | :---: |
-| `0` | 0° |
-| `1` | 180° |
-| `2` | 90° |
-| `3` | 270° |
-
-The network has **548,516 parameters**. It contains three `3 × 3` convolutional layers with 16, 32, and 64 output channels, each followed by ReLU and `2 × 2` max pooling. The resulting `64 × 8 × 8` features feed fully connected layers of 128 and 4 units.
+The CNN uses three convolutional blocks followed by two fully connected layers. Together, geometric alignment and orientation classification produce a consistently oriented input for character recognition.
 
 ### 4. Detect and assemble characters
 
-[`CharacterDetector`](models/character_detector.py) runs the second YOLO model on the upright crop at a default inference size of `640`. Each detected class maps to a character through the model's class names. The application sorts detections by horizontal bounding-box center and concatenates their labels.
+[`CharacterDetector`](models/character_detector.py) uses YOLO11n to detect individual characters on the upright crop. The application reads them from left to right to assemble the code.
 
 <p align="center">
   <img src="docs/images/character-detection.png" alt="Code card with individual alphanumeric characters enclosed in detection bounding boxes" width="640">
   <br>
-  <sub>Individual character detections on a code card. The live application draws card masks, track IDs, and accepted codes on the full frame.</sub>
+  <sub>Individual character detections on a code card.</sub>
 </p>
 
 ### 5. Retain the strongest reading
@@ -95,18 +75,17 @@ The network has **548,516 parameters**. It contains three `3 × 3` convolutional
 reading_score = confidence_1 × confidence_2 × … × confidence_13
 ```
 
-A new reading replaces the stored one only if its score is strictly higher. The application displays this product as a decimal, such as `Score: 0.742`. Segmentation and orientation confidence do not contribute to this score.
+A reading replaces the stored one only if its score is strictly higher. The score ranks readings; it is not a calibrated probability of a correct code. The preview displays it as a decimal, such as `Score: 0.742`.
 
-The first accepted reading produces a log entry. A stronger reading with a different code produces another entry. A stronger reading with the same code updates the stored score without writing a duplicate row.
+The CSV records the first accepted reading and subsequent code changes. Improving the score without changing the code does not add a row.
 
 ## Quick start
 
 ### Requirements
 
-- Python **3.10 or newer** for the syntax used by this project, with a version supported by your chosen PyTorch build.
-- A desktop session capable of opening an OpenCV window.
-- A webcam, or a screen capture environment supported by MSS.
-- Optional: a CUDA-capable GPU and a matching PyTorch installation. The application selects CUDA when `torch.cuda.is_available()` is true and otherwise uses CPU.
+- Python **3.10+**, compatible with your chosen PyTorch build.
+- A graphical desktop and a webcam or MSS-compatible screen capture environment.
+- Optional: a CUDA-capable GPU. The application automatically selects CUDA when available and otherwise uses CPU.
 
 ### 1. Clone and create an environment
 
@@ -128,26 +107,20 @@ Install `torch` and `torchvision` using the command generated by the [official P
 python -m pip install "ultralytics==8.3.228" opencv-python numpy Pillow mss "lap>=0.5.12"
 ```
 
-The Ultralytics version above matches the metadata in both bundled YOLO checkpoints. `lap` supplies the assignment dependency used by tracking. Keep the GUI-enabled `opencv-python` package because the application calls `cv2.imshow`. See the [Ultralytics installation guide](https://docs.ultralytics.com/quickstart/) for platform-specific installation details.
+The Ultralytics version matches the bundled YOLO checkpoints. Use GUI-enabled `opencv-python` for the preview window. Dependencies are not fully locked, and platform compatibility has not been systematically tested.
 
-This repository does not yet include a dependency lockfile or a validated environment matrix. Matching checkpoint metadata is a starting point, not a guarantee of compatibility with every Python, PyTorch, or operating-system version.
+### 3. Run
 
-### 3. Check the model files
-
-The following files are already tracked in the repository:
+The trained weights are included under `weights/`:
 
 ```text
 weights/
-├── card_segmenter.pt              # YOLO11n-seg
+├── card_segmenter.pt               # YOLO11n-seg
 ├── card_orientation_classifier.pth # Custom PyTorch CNN
-└── character_detector.pt          # YOLO11n
+└── character_detector.pt           # YOLO11n
 ```
 
-No training step is required to run inference. The paths in [`config/config.py`](config/config.py) are relative to the working directory, so launch the application from the repository root.
-
-### 4. Run
-
-The default input is webcam `0`:
+Run from the repository root. The default input is webcam `0`:
 
 ```bash
 python main.py
@@ -163,7 +136,7 @@ CAPTURE_SOURCE = "screen"
 MONITOR_INDEX = 1
 ```
 
-For MSS, monitor `1` is the first physical display and monitor `0` covers all displays. Keep the application's preview outside the captured area when possible to avoid capturing the preview itself. File paths, video URLs, and command-line flags are not supported input options in the current entry point.
+Monitor `1` is the first physical display; `0` covers all displays. Keep the preview outside the captured area when possible. Input is configured in Python, with no command-line flags or direct video-file/URL input.
 
 ## Output
 
@@ -176,11 +149,14 @@ By default, accepted code changes are appended to `card_codes_log.csv` in the wo
 
 *Illustrative values only.*
 
-The CSV is a change history, not a table of globally unique codes. A track can appear more than once when its accepted code changes. Tracking IDs belong to a run and may recur after restarting, while the existing file remains and receives new rows. For a separate session log, change `CARD_CODES_LOG_PATH` before launching.
+The file preserves a history of code changes, so a track can have multiple rows. IDs are session-local and may recur after restarting. Change `CARD_CODES_LOG_PATH` to keep separate session logs.
 
 ## Configuration
 
-All runtime settings live in [`config/config.py`](config/config.py). Restart the application after changing them.
+Edit [`config/config.py`](config/config.py) to set input devices, model paths, thresholds, and output options. Restart the application after changes.
+
+<details>
+<summary>Configuration reference</summary>
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -196,7 +172,7 @@ All runtime settings live in [`config/config.py`](config/config.py). Restart the
 | `FRAME_DISPLAY_SIZE` | `(840, 560)` | Preview width and height, independent of model input sizes. |
 | `CARD_CODES_LOG_PATH` | `"card_codes_log.csv"` | Append-only output file. |
 
-The same file defines the three model weight paths. The 13-character acceptance rule lives in `code_reader.py`, while the classifier's `64 × 64` input size and class-to-angle mapping live in `models/card_orientation_classifier.py`.
+</details>
 
 ## Code structure
 
@@ -216,12 +192,10 @@ ptcg-code-reader/
 │   ├── card_orientation_classifier.py   # CNN architecture and orientation inference
 │   └── character_detector.py            # YOLO character detection
 ├── logs/
-│   └── codes_log_writer.py              # Line-buffered CSV append writer
+│   └── codes_log_writer.py              # CSV output
 ├── weights/                             # Three trained checkpoints
 └── docs/images/                         # Pipeline and character detection examples
 ```
-
-The model wrappers return typed data objects (`SegmentedCard`, `PredictedCardOrientation`, and `DetectedCharacter`). `CodeReader` turns these into `CardReading` objects and owns the best-reading dictionary, keeping application policy separate from model inference.
 
 ## Training background
 
@@ -231,16 +205,17 @@ Training used transfer learning for YOLO11n-seg and YOLO11n, random initializati
 
 This repository contains inference code and checkpoints, but no datasets, training scripts, or evaluation harness. Current end-to-end code accuracy and throughput remain to be measured.
 
-## Limitations and next steps
+## Limitations
 
-- **Length is the only code-validity check.** A 13-character prediction can still be incorrect. There is no checksum, redemption check, or multi-frame voting.
-- **Tracking is session-local.** A card that disappears and returns may receive a new ID. There is no global code deduplication, and stored track histories remain in memory for the duration of the run.
-- **View quality matters.** Glare, small characters, occlusion, motion blur, and strong perspective distortion can affect the reading. The crop corrects tilt but not perspective.
-- **Throughput depends on the scene and device.** Processing is sequential, with orientation and character inference for each tracked card on each frame. This repository does not claim a measured FPS target.
-
-Useful next steps include a reproducible dependency lockfile, a labeled end-to-end evaluation set, temporal consensus for code selection, and explicit session identifiers in the log.
+- **Code validation:** length alone does not guarantee a correct reading. There is no checksum or multi-frame voting.
+- **Tracking:** a returning card may receive a new ID. Codes are not globally deduplicated.
+- **Image quality:** glare, blur, occlusion, and small text affect recognition. Alignment corrects tilt, not perspective distortion.
+- **Performance:** processing is sequential, so throughput depends on hardware and the number of visible cards.
 
 ## Troubleshooting
+
+<details>
+<summary>Common setup and capture issues</summary>
 
 | Symptom | What to check |
 | --- | --- |
@@ -252,6 +227,8 @@ Useful next steps include a reproducible dependency lockfile, a labeled end-to-e
 | CUDA is not selected | Check `python -c "import torch; print(torch.cuda.is_available())"` and your PyTorch installation. CPU is the automatic fallback. |
 | Cards remain yellow | Improve character visibility. A tracked card becomes green only after a 13-character reading passes the acceptance rule. |
 | Repeated IDs or corrected codes appear in CSV | This is an append-only history. See [Output](#output) for session and update semantics. |
+
+</details>
 
 ## Credits
 
