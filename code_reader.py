@@ -39,7 +39,7 @@ class CardReading:
 
     track_id: int
     code: str
-    confidence: float
+    score: float
 
 
 class CodeReader:
@@ -139,12 +139,12 @@ class CodeReader:
         detected_characters.sort(key=lambda detection: detection.center_x)
         code = "".join(detection.character for detection in detected_characters)
 
-        confidence_product = 1.0
+        reading_score = 1.0
         for detection in detected_characters:
-            confidence_product *= detection.confidence
+            reading_score *= detection.confidence
 
         return CardReading(
-            track_id=segmented_card.track_id, code=code, confidence=confidence_product
+            track_id=segmented_card.track_id, code=code, score=reading_score
         )
 
     def _update_best_card_reading(self, reading: CardReading) -> CardReading | None:
@@ -155,7 +155,7 @@ class CodeReader:
         best_card_reading = self._best_card_readings_by_track_id.get(reading.track_id)
         if (
             best_card_reading is not None
-            and reading.confidence <= best_card_reading.confidence
+            and reading.score <= best_card_reading.score
         ):
             return None
 

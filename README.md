@@ -95,7 +95,7 @@ The network has **548,516 parameters**. It contains three `3 × 3` convolutional
 reading_score = confidence_1 × confidence_2 × … × confidence_13
 ```
 
-A new reading replaces the stored one only if its score is strictly higher. The displayed percentage represents this product, **not a calibrated probability that the whole code is correct**. Segmentation and orientation confidence do not contribute to this score.
+A new reading replaces the stored one only if its score is strictly higher. The application displays this product as a decimal, such as `Score: 0.742`. Segmentation and orientation confidence do not contribute to this score.
 
 The first accepted reading produces a log entry. A stronger reading with a different code produces another entry. A stronger reading with the same code updates the stored score without writing a duplicate row.
 

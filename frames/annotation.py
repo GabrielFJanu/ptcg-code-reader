@@ -55,10 +55,9 @@ def _draw_card(annotated_frame, segmented_card, best_card_reading):
         cv2.LINE_AA,
     )
 
-    # Melhor código e sua confiança, acima do ID.
+    # Melhor código e seu score, acima do ID.
     if best_card_code is not None:
-        best_code_confidence_percent = best_card_reading.confidence * 100
-        code_label = f"{best_card_code} ({best_code_confidence_percent:.1f}%)"
+        code_label = f"{best_card_code} (Score: {best_card_reading.score:.3f})"
         cv2.putText(
             annotated_frame,
             code_label,
